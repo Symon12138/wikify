@@ -13,12 +13,10 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat-square&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/symon/wikify?style=flat-square)](https://github.com/symon/wikify/releases)
+[![Release](https://img.shields.io/github/v/release/JSHurt/wikify?style=flat-square)](https://github.com/JSHurt/wikify/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square)]()
 
 **语言 / Language：** 中文 | [English](README.en.md)
-
-*[legacy-wiki-cli](https://www.npmjs.com/package/legacy-wiki-cli) 的开源复刻版本 — 相同的功能与配置格式，完全开源。*
 
 </div>
 
@@ -28,12 +26,12 @@
 
 **wikify** 是一款命令行工具，通过 AI 智能体深度理解你的代码库，自动生成结构化、可读性强的 Wiki 文档。
 
-本项目是 `legacy-wiki-cli` 的完全开源复刻版，保持相同的配置格式和工作流，同时带来：
+wikify 专注于以下优势：
 
-- 🚀 **直接下载，无需 npm** — 单一二进制，无需 `npm install -g`
+- 🚀 **直接下载，无需包管理器** — 单一二进制，下载后直接使用
 - 🖥️ **实时 TUI** — 彩色进度表格，支持单页重试
 - 🔁 **草稿恢复** — 中断后可从断点继续生成
-- 🔌 **兼容原版** — 使用 `~/.wikify/config.yaml` 配置文件
+- 🔌 **配置文件** — 使用 `~/.wikify/config.yaml`
 - 🌐 **支持任意 OpenAI 兼容接口** — DeepSeek、OpenAI、Ollama 等
 
 ---
@@ -66,22 +64,22 @@ Phase 2 — Generate Pages (12/28)
 
 **方式一：下载二进制（推荐）**
 
-前往 [Releases](https://github.com/symon/wikify/releases) 下载对应平台的压缩包，解压后放入 `PATH`。
+前往 [Releases](https://github.com/JSHurt/wikify/releases) 下载对应平台的压缩包，解压后放入 `PATH`。
 
 ```bash
 # Linux amd64
-curl -L https://github.com/symon/wikify/releases/latest/download/wikify_v0.1.0_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/JSHurt/wikify/releases/latest/download/wikify_v0.1.0_linux_amd64.tar.gz | tar xz
 sudo mv wikify-linux-amd64 /usr/local/bin/wikify
 
 # macOS Apple Silicon
-curl -L https://github.com/symon/wikify/releases/latest/download/wikify_v0.1.0_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/JSHurt/wikify/releases/latest/download/wikify_v0.1.0_darwin_arm64.tar.gz | tar xz
 sudo mv wikify-darwin-arm64 /usr/local/bin/wikify
 ```
 
 **方式二：从源码构建**
 
 ```bash
-git clone https://github.com/symon/wikify.git
+git clone https://github.com/JSHurt/wikify.git
 cd wikify
 go build -o wikify .
 ```
@@ -321,24 +319,6 @@ wikify 使用 **OpenAI 兼容的 Chat Completions API**，支持任意兼容提�
 | Ollama（本地） | `http://localhost:11434/v1` |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{deploy}/` |
 | 自定义代理 | 你的接口地址 |
-
----
-
-## 🆚 与 `legacy-wiki-cli` 对比
-
-> `legacy-wiki-cli` 是 Go 程序，通过 npm 分发（`npm install -g legacy-wiki-cli`）。wikify 是其开源复刻版，可直接下载二进制使用。
-
-| 功能 | `legacy-wiki-cli` | **wikify** |
-|------|-------------|--------------|
-| 安装方式 | `npm install -g legacy-wiki-cli` | 直接下载二进制 |
-| 源码 | ❌ 闭源 | ✅ MIT 开源 |
-| 配置格式 | `~/.wikify/config.yaml` | ✅ 自有配置 |
-| 两阶段生成 | ✅ | ✅ |
-| 实时 TUI | ✅ | ✅ |
-| 单页重试（`r`） | ✅ | ✅ |
-| 跳过失败（`s`） | ✅ | ✅ |
-| 草稿 / 恢复 | ✅ | ✅ |
-| 文档浏览 | ✅ | ✅ |
 
 ---
 
