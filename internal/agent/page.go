@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
-	"github.com/JSHurt/wikify/internal/evidence"
-	"github.com/JSHurt/wikify/internal/models"
-	"github.com/JSHurt/wikify/internal/prompts"
-	"github.com/JSHurt/wikify/internal/scan"
-	"github.com/JSHurt/wikify/internal/tools"
+	"github.com/Symon12138/wikify/internal/evidence"
+	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/prompts"
+	"github.com/Symon12138/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/tools"
 )
 
 var blogPattern = regexp.MustCompile(`(?s)<blog>(.*?)</blog>`)

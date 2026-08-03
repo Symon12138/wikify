@@ -25,7 +25,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // KnownVendorLibs lists well-known open-source front-end / utility library

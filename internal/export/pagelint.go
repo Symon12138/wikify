@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // reMermaidHeader is the allowlist of mermaid diagram types: the first

@@ -13,7 +13,7 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat-square&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/JSHurt/wikify?style=flat-square)](https://github.com/JSHurt/wikify/releases)
+[![Release](https://img.shields.io/github/v/release/Symon12138/wikify?style=flat-square)](https://github.com/Symon12138/wikify/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square)]()
 
 **语言 / Language：** 中文 | [English](README.en.md)
@@ -64,22 +64,22 @@ Phase 2 — Generate Pages (12/28)
 
 **方式一：下载二进制（推荐）**
 
-前往 [Releases](https://github.com/JSHurt/wikify/releases) 下载对应平台的压缩包，解压后放入 `PATH`。
+前往 [Releases](https://github.com/Symon12138/wikify/releases) 下载对应平台的压缩包，解压后放入 `PATH`。
 
 ```bash
 # Linux amd64
-curl -L https://github.com/JSHurt/wikify/releases/latest/download/wikify_v0.1.0_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/latest/download/wikify_v0.1.0_linux_amd64.tar.gz | tar xz
 sudo mv wikify-linux-amd64 /usr/local/bin/wikify
 
 # macOS Apple Silicon
-curl -L https://github.com/JSHurt/wikify/releases/latest/download/wikify_v0.1.0_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/latest/download/wikify_v0.1.0_darwin_arm64.tar.gz | tar xz
 sudo mv wikify-darwin-arm64 /usr/local/bin/wikify
 ```
 
 **方式二：从源码构建**
 
 ```bash
-git clone https://github.com/JSHurt/wikify.git
+git clone https://github.com/Symon12138/wikify.git
 cd wikify
 go build -o wikify .
 ```

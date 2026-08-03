@@ -13,7 +13,7 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat-square&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/JSHurt/wikify?style=flat-square)](https://github.com/JSHurt/wikify/releases)
+[![Release](https://img.shields.io/github/v/release/Symon12138/wikify?style=flat-square)](https://github.com/Symon12138/wikify/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square)]()
 
 **Language:** [中文](README.md) | English
@@ -28,7 +28,7 @@
 
 Key highlights:
 
-- 📦 **Single binary** — download directly from [Releases](https://github.com/JSHurt/wikify/releases), no package manager needed
+- 📦 **Single binary** — download directly from [Releases](https://github.com/Symon12138/wikify/releases), no package manager needed
 - 🖥️ **Live TUI** — color-coded progress table with per-page retry
 - 🔁 **Draft & resume** — pick up where you left off after interruption
 - 🔌 **Config file** — stores settings in `~/.wikify/config.yaml`
@@ -64,22 +64,22 @@ Phase 2 — Generate Pages (12/28)
 
 **Download binary (recommended)**
 
-Go to [Releases](https://github.com/JSHurt/wikify/releases) and download the archive for your platform:
+Go to [Releases](https://github.com/Symon12138/wikify/releases) and download the archive for your platform:
 
 ```bash
 # Linux amd64
-curl -L https://github.com/JSHurt/wikify/releases/latest/download/wikify_v0.1.0_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/latest/download/wikify_v0.1.0_linux_amd64.tar.gz | tar xz
 sudo mv wikify-linux-amd64 /usr/local/bin/wikify
 
 # macOS Apple Silicon
-curl -L https://github.com/JSHurt/wikify/releases/latest/download/wikify_v0.1.0_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/latest/download/wikify_v0.1.0_darwin_arm64.tar.gz | tar xz
 sudo mv wikify-darwin-arm64 /usr/local/bin/wikify
 ```
 
 **Build from source**
 
 ```bash
-git clone https://github.com/JSHurt/wikify.git
+git clone https://github.com/Symon12138/wikify.git
 cd wikify
 go build -o wikify .
 ```

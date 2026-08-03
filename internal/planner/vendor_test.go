@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/JSHurt/wikify/internal/evidence"
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/evidence"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 var reVendorTitle = regexp.MustCompile(`(?i)crypto|swiper|encutf16|enc.?utf|rabbit|nopadding|jquery|datatables`)

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // Prompt-size caps for the bundle blocks rendered by PromptSection.

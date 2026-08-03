@@ -12,9 +12,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/evidence"
-	"github.com/JSHurt/wikify/internal/models"
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/evidence"
+	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // ExportOptions controls Wiki export layout.

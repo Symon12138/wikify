@@ -13,9 +13,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/evidence"
-	"github.com/JSHurt/wikify/internal/models"
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/evidence"
+	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // pageQuality carries per-page QL-2/QL-3 counters threaded from Export's

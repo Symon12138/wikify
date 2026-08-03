@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // defaultMermaid returns up to need diagram blocks for title.

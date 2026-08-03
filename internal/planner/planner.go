@@ -8,10 +8,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/JSHurt/wikify/internal/evidence"
-	"github.com/JSHurt/wikify/internal/models"
-	"github.com/JSHurt/wikify/internal/scan"
-	"github.com/JSHurt/wikify/internal/wikiplan"
+	"github.com/Symon12138/wikify/internal/evidence"
+	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/wikiplan"
 )
 
 // Planned is one planned wiki page before LLM generation.

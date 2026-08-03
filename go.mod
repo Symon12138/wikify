@@ -1,4 +1,4 @@
-module github.com/JSHurt/wikify
+module github.com/Symon12138/wikify
 
 go 1.24.2
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // Committed library trees (crypto-js style) must be vendor even without any

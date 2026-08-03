@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JSHurt/wikify/internal/models"
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // coverageFixture: one fully covered cluster (order) + one uncovered (billing).

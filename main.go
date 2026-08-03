@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/JSHurt/wikify/internal/browse"
-	"github.com/JSHurt/wikify/internal/config"
-	"github.com/JSHurt/wikify/internal/export"
-	"github.com/JSHurt/wikify/internal/runner"
+	"github.com/Symon12138/wikify/internal/browse"
+	"github.com/Symon12138/wikify/internal/config"
+	"github.com/Symon12138/wikify/internal/export"
+	"github.com/Symon12138/wikify/internal/runner"
 )
 
 var appVersion = "0.1.0"
@@ -23,7 +23,7 @@ func main() {
 	root := &cobra.Command{
 		Use:          "wikify",
 		Short:        "Turn any codebase into a beautiful wiki",
-		Long:         "wikify — generate structured wiki documentation from your local codebase using an AI agent.\nSee https://github.com/JSHurt/wikify for docs.",
+		Long:         "wikify — generate structured wiki documentation from your local codebase using an AI agent.\nSee https://github.com/Symon12138/wikify for docs.",
 		SilenceUsage: true,
 	}
 	root.AddCommand(

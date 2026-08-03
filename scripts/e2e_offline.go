@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/evidence"
-	"github.com/JSHurt/wikify/internal/export"
-	"github.com/JSHurt/wikify/internal/models"
-	"github.com/JSHurt/wikify/internal/planner"
-	"github.com/JSHurt/wikify/internal/scan"
-	"github.com/JSHurt/wikify/internal/wikiplan"
+	"github.com/Symon12138/wikify/internal/evidence"
+	"github.com/Symon12138/wikify/internal/export"
+	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/planner"
+	"github.com/Symon12138/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/wikiplan"
 )
 
 func main() {

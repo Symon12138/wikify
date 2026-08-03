@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // TitleBridge is a generated, product-agnostic map from path/title tokens to

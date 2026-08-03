@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
-	"github.com/JSHurt/wikify/internal/models"
-	"github.com/JSHurt/wikify/internal/prompts"
-	"github.com/JSHurt/wikify/internal/tools"
+	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/prompts"
+	"github.com/Symon12138/wikify/internal/tools"
 )
 
 // RunCatalog explores the repository and returns a structured Wiki catalog.

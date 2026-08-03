@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/Symon12138/wikify/internal/scan"
 )
 
 // PickDependentFiles returns the top scored evidence paths for a page title/goal.
