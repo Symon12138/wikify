@@ -103,11 +103,31 @@ func (w *Wiki) FormatCatalog(currentSlug string) string {
 			if p.Slug == currentSlug {
 				marker = " [You are currently here]"
 			}
-			lines = append(lines, fmt.Sprintf("%s- [%s](%s)%s", indent, p.Title, p.Slug, marker))
+			// Prefer ContentPath / Title.md so LLM catalog context and nav links
+			// resolve on disk. Bare counter slugs (e.g. "50-50") break browsers.
+			lines = append(lines, fmt.Sprintf("%s- [%s](%s)%s", indent, p.Title, catalogLinkTarget(p), marker))
 		}
 		lines = append(lines, "")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// catalogLinkTarget is a stable, resolvable relative path for catalog navigation.
+// ContentPath (under content/) wins; otherwise Title.md. Slug is never used alone
+// because CJK titles degrade to "N-N" via MakeSlug and are not real file names.
+func catalogLinkTarget(p WikiPage) string {
+	if cp := strings.TrimSpace(p.ContentPath); cp != "" {
+		cp = strings.TrimPrefix(cp, "content/")
+		cp = strings.TrimPrefix(cp, "/content/")
+		return strings.ReplaceAll(cp, "\\", "/")
+	}
+	if t := strings.TrimSpace(p.Title); t != "" {
+		return t + ".md"
+	}
+	if p.Slug != "" {
+		return p.Slug
+	}
+	return "page.md"
 }
 
 // RelatedCrossTrack returns pages on the opposite rail that share title/section tokens.
@@ -168,14 +188,32 @@ func (w *Wiki) RelatedCrossTrack(page WikiPage, limit int) []WikiPage {
 			break
 		}
 	}
-	// If business page has no technical match, link API/data index pages.
+	// If business page has no technical match, link technical index pages (CN+EN).
 	if len(out) == 0 && src == TrackBusiness {
 		for _, p := range w.Pages {
 			tr := p.Track
 			if tr == "" {
 				tr = InferTrack(p)
 			}
-			if tr == TrackTechnical && (p.Title == p.Section || strings.Contains(p.Section, "接口") || strings.Contains(p.Section, "API") || strings.Contains(p.Section, "数据") || strings.Contains(p.Section, "架构")) {
+			if tr != TrackTechnical {
+				continue
+			}
+			if isTechnicalIndexPage(p) {
+				out = append(out, p)
+				if len(out) >= limit {
+					break
+				}
+			}
+		}
+	}
+	// Symmetric: technical page with no business hit → foundation overview if present.
+	if len(out) == 0 && src == TrackTechnical {
+		for _, p := range w.Pages {
+			tr := p.Track
+			if tr == "" {
+				tr = InferTrack(p)
+			}
+			if tr == TrackFoundation {
 				out = append(out, p)
 				if len(out) >= limit {
 					break
@@ -186,51 +224,394 @@ func (w *Wiki) RelatedCrossTrack(page WikiPage, limit int) []WikiPage {
 	return out
 }
 
-// InferTrack assigns foundation | business | technical from section/title when Track is empty or invalid.
-// Exported so planner/runner share one rule set after free LLM catalogs.
-func InferTrack(p WikiPage) string {
-	if p.Track == TrackFoundation || p.Track == TrackBusiness || p.Track == TrackTechnical {
-		return p.Track
-	}
-	sec := p.Section
-	title := p.Title
-	switch {
-	case sec == "项目概述" || sec == "快速开始" || sec == "Project Overview" || sec == "Getting Started" ||
-		sec == "Get Started" || sec == "Overview":
-		return TrackFoundation
-	case isBusinessSection(sec):
-		// 客户管理模块 / 指标监控模块 / Customer Management …
-		return TrackBusiness
-	case strings.Contains(sec, "接口") || strings.Contains(sec, "API") || strings.Contains(sec, "数据") || strings.Contains(sec, "架构") ||
-		strings.Contains(sec, "部署") || strings.Contains(sec, "运维") || strings.Contains(sec, "安全") || strings.Contains(sec, "开发") ||
-		strings.Contains(sec, "故障") || strings.Contains(sec, "配置") ||
-		strings.Contains(sec, "Architecture") || strings.Contains(sec, "Deploy") || strings.Contains(sec, "Security") || strings.Contains(sec, "Developer") ||
-		strings.Contains(sec, "Database") || strings.Contains(sec, "Data Model"):
-		return TrackTechnical
-	case strings.Contains(title, "管理") && !strings.Contains(title, "配置管理"):
-		return TrackBusiness
-	default:
-		return TrackTechnical
-	}
-}
-
-// isBusinessSection identifies capability-module sections (not core-framework dumps).
-func isBusinessSection(sec string) bool {
-	if sec == "" {
-		return false
-	}
-	// Core framework sections stay technical even if they contain 模块.
-	if strings.Contains(sec, "核心业务") || strings.Contains(sec, "核心模块") || strings.Contains(sec, "Core Module") {
-		return false
-	}
-	if strings.Contains(sec, "模块") {
+// isTechnicalIndexPage detects architecture/API/data/ops index pages in CN or EN.
+func isTechnicalIndexPage(p WikiPage) bool {
+	// Section-level index: title equals section, or section/title carries tech labels.
+	if p.Title != "" && p.Title == p.Section {
 		return true
 	}
-	if strings.Contains(sec, "Management") || strings.Contains(sec, "Monitoring") ||
-		strings.Contains(sec, "Workflow") || strings.Contains(sec, "Audit") || strings.Contains(sec, "Risk") {
+	hay := p.Section + " " + p.Title
+	keys := []string{
+		"接口", "API", "数据", "架构", "部署", "运维", "安全", "配置", "故障",
+		"Architecture", "Deploy", "Deployment", "Security", "Database", "Data Model",
+		"Configuration", "Troubleshooting", "Operations", "Ops", "Developer",
+		"Core Modules", "System Architecture", "API Documentation",
+	}
+	for _, k := range keys {
+		if strings.Contains(hay, k) {
+			return true
+		}
+	}
+	return isTechnicalSection(p.Section)
+}
+
+// InferTrack assigns foundation | business | technical from section/title when Track is empty or invalid.
+// Exported so planner/runner share one rule set after free LLM catalogs.
+//
+// Policy:
+//   - Empty/invalid Track → full classification.
+//   - Already-valid Track is kept, except strong foundation cues promote business→foundation
+//     (LLM free catalogs often mislabel 入门/总览/阅读路径 as business).
+//   - Never demotes technical → foundation solely on soft "总览" cues when the topic is eng-heavy.
+func InferTrack(p WikiPage) string {
+	sec := strings.TrimSpace(p.Section)
+	title := strings.TrimSpace(p.Title)
+	goal := strings.TrimSpace(p.Goal)
+
+	// Capability leaves under orientation sections (e.g. 项目概述/客户关系管理能力概览)
+	// must stay on the business rail — never inherit foundation from the container alone.
+	if isCapabilityLeafTitle(title) {
+		if isTechnicalSection(sec) || isTechnicalSection(title) {
+			return TrackTechnical
+		}
+		return TrackBusiness
+	}
+
+	// Strong foundation cues promote any mislabeled rail (LLM free catalogs stamp
+	// 入门/阅读路径 as business).
+	if isFoundationCue(sec, title, goal) {
+		return TrackFoundation
+	}
+
+	// Stale foundation labels: only keep when the leaf is still orientation.
+	// (Previous polishes / free catalogs sometimes painted eng/business leaves foundation.)
+	if p.Track == TrackFoundation {
+		// fall through to reclassify
+	} else if p.Track == TrackBusiness || p.Track == TrackTechnical {
+		// Preserve business/technical when no foundation cue applies.
+		return p.Track
+	}
+
+	if isTechnicalSection(sec) || isTechnicalSection(title) {
+		return TrackTechnical
+	}
+	if isBusinessSection(sec) {
+		return TrackBusiness
+	}
+	// Title cues for capability pages (CN 管理, EN Management/Process).
+	if strings.Contains(title, "管理") && !strings.Contains(title, "配置管理") {
+		return TrackBusiness
+	}
+	if matchFold(title, "management") || matchFold(title, "capability") || matchFold(title, "process") {
+		return TrackBusiness
+	}
+	// Domain "…业务总览" under a module section → business.
+	if strings.Contains(title, "业务总览") || strings.Contains(title, "业务概述") {
+		return TrackBusiness
+	}
+	return TrackTechnical
+}
+
+// isCapabilityLeafTitle detects domain capability pages that often sit under a
+// foundation container section (项目概述 / 快速开始) but are not onboarding.
+// Generic engineering vocabulary only — no product-domain lexicon.
+func isCapabilityLeafTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
+	}
+	// Repo-level maps / positioning stay foundation.
+	if strings.Contains(t, "全景") || strings.Contains(t, "定位") || strings.Contains(t, "简介") ||
+		strings.Contains(t, "阅读路径") || strings.Contains(t, "推荐阅读") ||
+		strings.Contains(t, "适用场景") || strings.Contains(t, "导读") ||
+		strings.Contains(t, "快速开始") || strings.Contains(t, "快速上手") ||
+		strings.Contains(t, "入门") || matchFold(t, "getting started") ||
+		matchFold(t, "introduction") || matchFold(t, "onboarding") {
+		return false
+	}
+	// "…能力概览/概述" with a domain stem (客户关系管理能力概览).
+	if strings.Contains(t, "能力概览") || strings.Contains(t, "能力概述") ||
+		strings.Contains(t, "Capability Overview") || strings.Contains(t, "capability overview") {
+		return true
+	}
+	// Capability / process leaves without orientation words.
+	if strings.Contains(t, "业务域") {
 		return true
 	}
 	return false
+}
+
+// isFoundationCue reports onboarding / orientation topics (dual-rail foundation).
+// Generic engineering words only — no product-domain lexicon.
+func isFoundationCue(sec, title, goal string) bool {
+	if isCapabilityLeafTitle(title) {
+		return false
+	}
+	// Title itself is an orientation page.
+	if isFoundationSection(title) || isOrientationTitle(title) {
+		return true
+	}
+	// Goal-only orientation (rare).
+	if isOrientationTitle(goal) {
+		return true
+	}
+	// Foundation container section: inherit foundation for leaves that are not
+	// clearly technical/eng indexes. Capability leaves already returned false.
+	// This keeps short synthetic titles under 项目概述 on the foundation rail
+	// (planner fixtures) while still letting "部署/接口/架构…" leaves escape.
+	if isFoundationSection(sec) {
+		if isTechnicalSection(title) || isStrongTechnicalTopic(title) {
+			return false
+		}
+		if strings.Contains(title, "业务总览") || strings.Contains(title, "业务概述") {
+			return false
+		}
+		return true
+	}
+	blob := sec + " " + title + " " + goal
+	if strings.TrimSpace(blob) == "" {
+		return false
+	}
+	// Strong onboarding phrases on title/goal (not bare section container words alone).
+	strong := []string{
+		"快速开始", "快速上手", "入门", "阅读路径", "推荐阅读",
+		"适用场景", "平台定位", "导读", "读者路径", "仓库定位",
+		"Getting Started", "Get Started", "Project Overview", "Introduction",
+		"Onboarding", "Reading Path", "Read Path", "Who This Is For",
+	}
+	tg := title + " " + goal
+	for _, k := range strong {
+		if strings.Contains(tg, k) {
+			return true
+		}
+	}
+	// Soft: bare 总览 / Overview — only for pure onboarding blobs.
+	// Capability clusters like "Billing Overview" / "订单概述" stay business.
+	if isSoftOverviewOnboarding(blob) {
+		return true
+	}
+	return false
+}
+
+// isOrientationTitle is true for leaf titles that belong on the foundation rail.
+func isOrientationTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
+	}
+	if isFoundationSection(t) {
+		return true
+	}
+	keys := []string{
+		"定位", "适用场景", "阅读路径", "推荐阅读", "导读", "读者路径",
+		"简介", "术语表", "版本说明", "交付形态", "运行前提", "环境准备",
+		"源码获取", "本地构建", "本地运行", "首次登录",
+		"可运行配置", "快速开始", "快速上手", "入门",
+		"全景", "业务边界", "能力地图", "能力全景",
+		"Getting Started", "Introduction", "Onboarding", "Reading Path",
+		"Who This Is For", "Prerequisites", "Quick Start", "Capability Map",
+	}
+	for _, k := range keys {
+		if strings.Contains(t, k) || matchFold(t, k) {
+			return true
+		}
+	}
+	// "应用启动" is orientation only without framework/tech stems (ExtJS/app.js…).
+	if strings.Contains(t, "应用启动") && !isStrongTechnicalTopic(t) &&
+		!strings.Contains(t, "Ext") && !strings.Contains(t, "app.js") &&
+		!matchFold(t, "spring") {
+		return true
+	}
+	// "开发模式" alone is onboarding; with resource/build tech stays technical via other rails.
+	if strings.Contains(t, "开发模式") && !isStrongTechnicalTopic(t) {
+		return true
+	}
+	// Pure overview labels at title level.
+	if isSoftOverviewOnboarding(t) {
+		return true
+	}
+	return false
+}
+
+// isSoftOverviewOnboarding is true for repo-level orientation overviews only.
+// "Foo Overview" / "Foo概述" with a non-empty domain prefix → capability cluster.
+func isSoftOverviewOnboarding(blob string) bool {
+	blob = strings.TrimSpace(blob)
+	if blob == "" {
+		return false
+	}
+	if isStrongTechnicalTopic(blob) {
+		return false
+	}
+	// Domain capability / business stems mean this is not pure repo orientation.
+	// e.g. "知识管理平台业务总览" contains 平台+总览 but is a capability page.
+	if strings.Contains(blob, "业务") || strings.Contains(blob, "能力") ||
+		strings.Contains(blob, "模块") || matchFold(blob, "billing") ||
+		matchFold(blob, "order") || matchFold(blob, "payment") {
+		// Exception: pure "业务定位/业务边界" orientation phrases.
+		if !(strings.Contains(blob, "业务定位") || strings.Contains(blob, "业务边界") ||
+			strings.Contains(blob, "业务域全景")) {
+			return false
+		}
+	}
+	// Pure overview labels.
+	pure := []string{"总览", "概述", "Overview", "overview"}
+	for _, p := range pure {
+		if strings.EqualFold(blob, p) {
+			return true
+		}
+	}
+	// "项目总览" / "平台总览" / "仓库 Overview" etc. without a capability stem.
+	// Require the orientation noun to dominate (starts with / is near 项目|平台|仓库).
+	if strings.HasPrefix(blob, "项目") || strings.HasPrefix(blob, "平台") || strings.HasPrefix(blob, "仓库") ||
+		matchFold(blob, "project overview") || matchFold(blob, "platform overview") || matchFold(blob, "repo overview") {
+		if strings.Contains(blob, "总览") || strings.Contains(blob, "概述") || matchFold(blob, "overview") {
+			return true
+		}
+	}
+	// Short phrases like "项目总览" / "平台总览" as whole-ish tokens.
+	for _, pref := range []string{"项目总览", "平台总览", "仓库总览", "项目概述", "平台概述", "仓库概述",
+		"入门总览", "系统总览", "整体总览", "全局总览", "整体概述", "全局概述"} {
+		if strings.Contains(blob, pref) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFoundationSection(s string) bool {
+	if s == "" {
+		return false
+	}
+	switch s {
+	case "项目概述", "快速开始", "平台入门与总览", "入门与总览",
+		"Project Overview", "Getting Started", "Get Started", "Overview", "Introduction":
+		return true
+	}
+	// Section names that are clearly onboarding containers.
+	if strings.Contains(s, "入门") || strings.Contains(s, "快速开始") || strings.Contains(s, "快速上手") {
+		return true
+	}
+	if strings.Contains(s, "阅读路径") || strings.Contains(s, "推荐阅读") {
+		return true
+	}
+	if matchFold(s, "getting started") || matchFold(s, "project overview") || matchFold(s, "onboarding") {
+		return true
+	}
+	// Soft section-level overview: only pure onboarding containers.
+	if isSoftOverviewOnboarding(s) {
+		return true
+	}
+	return false
+}
+
+// isStrongTechnicalTopic is used to keep eng indexes on the technical rail
+// even when the title contains soft foundation words like 总览/Overview.
+func isStrongTechnicalTopic(s string) bool {
+	if s == "" {
+		return false
+	}
+	keys := []string{
+		"接口", "API", "安全", "部署", "运维", "测试", "数据访问", "数据库", "缓存",
+		"日志", "工作流", "ETL", "MyBatis", "Spring", "Controller", "Service",
+		"Mapper", "Filter", "Interceptor", "Docker", "K8s", "CI", "CD",
+		"Architecture", "Deploy", "Security", "Database", "Workflow",
+	}
+	for _, k := range keys {
+		if strings.Contains(s, k) || matchFold(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTechnicalSection(s string) bool {
+	if s == "" {
+		return false
+	}
+	// Core framework / engineering labels stay technical even if they contain 模块.
+	if strings.Contains(s, "核心业务") || strings.Contains(s, "核心模块") ||
+		strings.Contains(s, "Core Module") || strings.Contains(s, "Core Modules") {
+		return true
+	}
+	keys := []string{
+		"接口", "API", "数据", "架构", "部署", "运维", "安全", "开发", "故障", "配置",
+		"测试与质量", "技术栈", "目录结构",
+		"Architecture", "Deploy", "Security", "Developer", "Database", "Data Model",
+		"Configuration", "Troubleshooting", "Testing", "Operations", "Ops",
+	}
+	for _, k := range keys {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// isBusinessSection identifies capability-module sections (not core-framework dumps).
+// Works for CN (…模块), EN (…Management), and path-derived short ASCII tokens (Billing, Cust).
+// Free-form Chinese orientation sections (入门/总览/… without 模块) must NOT fall here —
+// they are foundation via isFoundationCue / isFoundationSection.
+func isBusinessSection(sec string) bool {
+	if sec == "" || isFoundationSection(sec) || isTechnicalSection(sec) {
+		return false
+	}
+	if isFoundationCue(sec, "", "") {
+		return false
+	}
+	if strings.Contains(sec, "模块") {
+		// 核心模块 stays technical (handled above via isTechnicalSection).
+		return true
+	}
+	if strings.Contains(sec, "Management") || strings.Contains(sec, "Monitoring") ||
+		strings.Contains(sec, "Workflow") || strings.Contains(sec, "Audit") ||
+		strings.Contains(sec, "Risk") || strings.Contains(sec, "Capability") ||
+		strings.Contains(sec, "Domain") || strings.Contains(sec, "Business") {
+		return true
+	}
+	// Path-clustering style: "Foo Overview" / "Foo概述" — capability cluster, not repo onboarding.
+	if strings.HasSuffix(sec, " Overview") || strings.HasSuffix(sec, "概述") {
+		// Pure onboarding overviews already returned false via isFoundationCue.
+		return true
+	}
+	// Short package-like section names: ASCII path tokens only (Cust, Billing).
+	// Chinese multi-character phrases without spaces used to false-positive as business
+	// (e.g. 平台入门与总览) — require mostly-ASCII for this heuristic.
+	runes := []rune(sec)
+	if len(runes) >= 2 && len(runes) <= 40 && !strings.Contains(sec, "/") && mostlyASCII(sec) {
+		if !strings.Contains(sec, " ") || isTitleCasePhrase(sec) {
+			return true
+		}
+	}
+	return false
+}
+
+func mostlyASCII(s string) bool {
+	if s == "" {
+		return false
+	}
+	ascii, total := 0, 0
+	for _, r := range s {
+		if r == ' ' || r == '-' || r == '_' {
+			continue
+		}
+		total++
+		if r <= 127 {
+			ascii++
+		}
+	}
+	return total > 0 && ascii*100/total >= 70
+}
+
+func matchFold(s, sub string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
+}
+
+func isTitleCasePhrase(s string) bool {
+	parts := strings.Fields(s)
+	if len(parts) == 0 || len(parts) > 4 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+		r := []rune(p)
+		if r[0] >= 'a' && r[0] <= 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 func tokeniseTitle(s string) []string {

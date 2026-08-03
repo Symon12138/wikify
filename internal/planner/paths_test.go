@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/symon/wikify/internal/models"
+	"github.com/JSHurt/wikify/internal/models"
 )
 
 func TestApplyHierarchyPaths(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/symon/wikify/internal/models"
+	"github.com/JSHurt/wikify/internal/models"
 )
 
 // ApplyHierarchyPaths sets Parent / ContentPath / DescriptionSlug from the

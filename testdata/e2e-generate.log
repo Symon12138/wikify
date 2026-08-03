@@ -1,0 +1,8 @@
+=== REAL GENERATE start 2026-07-23T07:56:57+08:00 ===
+Clearing draft: E:\Project\AI\openread\testdata\e2e-sample\.wikify\drafts
+[34mPhase 1 — Generate Catalog[0m
+[32m  [done] — 13 pages across 5 sections[0m
+
+[34mPhase 2 — Generate Pages (13 total)[0m
+[2m13 pages, 3 workers[0m
+  [33m⚠ auto-retry 1/2: API call failed (turn 1): error, status code: 429, message: Upstream rate limit exceeded, please retry later[0m

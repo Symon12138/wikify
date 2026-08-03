@@ -8,9 +8,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/symon/wikify/internal/models"
-	"github.com/symon/wikify/internal/scan"
-	"github.com/symon/wikify/internal/wikiplan"
+	"github.com/JSHurt/wikify/internal/evidence"
+	"github.com/JSHurt/wikify/internal/models"
+	"github.com/JSHurt/wikify/internal/scan"
+	"github.com/JSHurt/wikify/internal/wikiplan"
 )
 
 // Planned is one planned wiki page before LLM generation.
@@ -24,6 +25,9 @@ type Planned struct {
 	Level       string
 	Track       string // foundation | business | technical
 	ContentPath string // relative under content/, e.g. 系统架构设计/整体架构设计.md
+	// DependentFiles pre-binds evidence paths (repo-relative, slash-separated).
+	// bindEvidence skips pages that already carry deps, so these survive.
+	DependentFiles []string
 }
 
 // Options controls planning size.
@@ -53,8 +57,18 @@ func Build(model *scan.Model, plan *wikiplan.Plan, opts Options) *models.Wiki {
 		return fromAllowlist(docs, opts.MaxPages)
 	}
 
-	foundation, technicalBase := buildDefaultTreeSplit(model, zh)
-	business := buildBusinessDomains(model, zh)
+	// Dual-rail budgets: fractions of MaxPages; floors never sum above MaxPages.
+	// Computed before seeding so section/child caps can scale with the budget.
+	foundBudget, bizBudget, techBudget := railBudgets(opts.MaxPages)
+
+	// Vendor detector shared by all candidate builders: committed third-party
+	// library trees (crypto-js, swiper, jquery plugins …) must not become page
+	// candidates. scope.include patterns that explicitly name a library exempt
+	// their paths (see evidence.NewVendorDetector).
+	vd := evidence.NewVendorDetector(model, plan.ScopeInclude())
+
+	foundation, technicalBase := buildDefaultTreeSplit(model, zh, techBudget)
+	business := buildBusinessDomains(model, zh, bizBudget, vd)
 
 	// Assign tracks explicitly (idempotent).
 	for i := range foundation {
@@ -65,20 +79,6 @@ func Build(model *scan.Model, plan *wikiplan.Plan, opts Options) *models.Wiki {
 	}
 	for i := range technicalBase {
 		technicalBase[i].Track = models.TrackTechnical
-	}
-
-	// Dual-rail budgets
-	bizBudget := int(float64(opts.MaxPages) * 0.50)
-	if bizBudget < 12 {
-		bizBudget = 12
-	}
-	techBudget := int(float64(opts.MaxPages) * 0.40)
-	if techBudget < 16 {
-		techBudget = 16
-	}
-	foundBudget := opts.MaxPages - bizBudget - techBudget
-	if foundBudget < 4 {
-		foundBudget = 4
 	}
 
 	if len(foundation) > foundBudget {
@@ -100,7 +100,7 @@ func Build(model *scan.Model, plan *wikiplan.Plan, opts Options) *models.Wiki {
 	if invCap < 0 {
 		invCap = 0
 	}
-	inv := buildInventory(model, zh, invCap)
+	inv := buildInventory(model, zh, invCap, vd)
 	for i := range inv {
 		inv[i].Track = models.TrackTechnical
 	}
@@ -112,8 +112,9 @@ func Build(model *scan.Model, plan *wikiplan.Plan, opts Options) *models.Wiki {
 	// Order: foundation → business → technical (browse-friendly dual rail).
 	items := mergeUnique(foundation, business)
 	items = mergeUnique(items, technical)
+	// Per-rail trim if somehow over MaxPages (never prefix-chop mixed rails).
 	if len(items) > opts.MaxPages {
-		items = items[:opts.MaxPages]
+		items = trimPlannedByRail(items, opts.MaxPages)
 	}
 	for i := range items {
 		if items[i].Track == "" {
@@ -121,6 +122,181 @@ func Build(model *scan.Model, plan *wikiplan.Plan, opts Options) *models.Wiki {
 		}
 	}
 	return toWiki(items)
+}
+
+// railBudgets returns foundation/business/technical page caps that always sum to maxPages.
+// Target mix ≈ 10% / 50% / 40%, with tiny floors that scale down for small maxPages.
+func railBudgets(maxPages int) (found, biz, tech int) {
+	if maxPages <= 0 {
+		maxPages = 120
+	}
+	biz = int(float64(maxPages) * 0.50)
+	tech = int(float64(maxPages) * 0.40)
+	found = maxPages - biz - tech
+	// Soft floors only when MaxPages is large enough to absorb them.
+	if maxPages >= 40 {
+		if biz < 8 {
+			biz = 8
+		}
+		if tech < 10 {
+			tech = 10
+		}
+		if found < 2 {
+			found = 2
+		}
+	} else {
+		// Small catalogs: keep at least 1 foundation when possible.
+		if found < 1 {
+			found = 1
+		}
+		if biz < 1 {
+			biz = 1
+		}
+		if tech < 1 {
+			tech = 1
+		}
+	}
+	// Re-normalize so sum == maxPages (prefer shrinking tech, then biz).
+	sum := found + biz + tech
+	for sum > maxPages {
+		if tech > 1 {
+			tech--
+		} else if biz > 1 {
+			biz--
+		} else if found > 1 {
+			found--
+		} else {
+			break
+		}
+		sum = found + biz + tech
+	}
+	for sum < maxPages {
+		// Give remainder to business first (capability coverage).
+		biz++
+		sum++
+	}
+	return found, biz, tech
+}
+
+// SuggestMaxPages scales the default catalog budget with repository substance:
+// 12 + codeFiles/8 + 2*modules, clamped to [12, 200], where codeFiles counts
+// files that are code and not on noise paths. A nil/empty model (scan failed or
+// nothing survived scope) keeps the legacy 120 fallback.
+func SuggestMaxPages(model *scan.Model) int {
+	if model == nil || len(model.Files) == 0 {
+		return 120
+	}
+	code := 0
+	for _, f := range model.Files {
+		if scan.IsCodeFile(f.RelativePath) && !scan.IsNoisePath(f.RelativePath) {
+			code++
+		}
+	}
+	n := 12 + code/8 + 2*len(model.Modules)
+	if n < 12 {
+		n = 12
+	}
+	if n > 200 {
+		n = 200
+	}
+	return n
+}
+
+// trimPlannedByRail trims Planned lists keeping dual-rail proportions.
+func trimPlannedByRail(items []Planned, maxPages int) []Planned {
+	if maxPages <= 0 || len(items) <= maxPages {
+		return items
+	}
+	foundB, bizB, techB := railBudgets(maxPages)
+	var f, b, t []Planned
+	for _, p := range items {
+		tr := p.Track
+		if tr == "" {
+			tr = trackForCategory(p.Category, p.Section)
+		}
+		switch tr {
+		case models.TrackFoundation:
+			f = append(f, p)
+		case models.TrackBusiness:
+			b = append(b, p)
+		default:
+			t = append(t, p)
+		}
+	}
+	if len(f) > foundB {
+		f = f[:foundB]
+	}
+	if len(b) > bizB {
+		b = b[:bizB]
+	}
+	if len(t) > techB {
+		t = t[:techB]
+	}
+	out := append(append(f, b...), t...)
+	if len(out) > maxPages {
+		out = out[:maxPages]
+	}
+	return out
+}
+
+// TrimWikiByRail trims a free LLM catalog to maxPages while preserving dual-rail mix.
+// Prefer dropping technical inventory tail over foundation/business pages.
+func TrimWikiByRail(wiki *models.Wiki, maxPages int) {
+	if wiki == nil || maxPages <= 0 || len(wiki.Pages) <= maxPages {
+		return
+	}
+	EnsureTracks(wiki)
+	foundB, bizB, techB := railBudgets(maxPages)
+	var f, b, t []models.WikiPage
+	for _, p := range wiki.Pages {
+		switch p.Track {
+		case models.TrackFoundation:
+			f = append(f, p)
+		case models.TrackBusiness:
+			b = append(b, p)
+		default:
+			t = append(t, p)
+		}
+	}
+	if len(f) > foundB {
+		f = f[:foundB]
+	}
+	if len(b) > bizB {
+		b = b[:bizB]
+	}
+	if len(t) > techB {
+		t = t[:techB]
+	}
+	// If under max after caps, fill from remaining technical then business then foundation.
+	out := append(append(f, b...), t...)
+	if len(out) < maxPages {
+		// Rebuild leftovers by original order
+		seen := map[string]bool{}
+		for _, p := range out {
+			seen[p.Slug+p.Title] = true
+		}
+		for _, p := range wiki.Pages {
+			if len(out) >= maxPages {
+				break
+			}
+			key := p.Slug + p.Title
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, p)
+		}
+	}
+	if len(out) > maxPages {
+		out = out[:maxPages]
+	}
+	// Re-slug if needed for stability after reorder
+	for i := range out {
+		if out[i].Slug == "" {
+			out[i].Slug = models.MakeSlug(i+1, out[i].Title)
+		}
+	}
+	wiki.Pages = out
 }
 
 func trackForCategory(cat, section string) string {
@@ -137,28 +313,32 @@ func trackForCategory(cat, section string) string {
 }
 
 // EnsureTracks fills empty/invalid Track on every page via models.InferTrack.
+// Also re-runs InferTrack for already-valid tracks so foundation promotion
+// (入门/总览/阅读路径 mislabeled as business) applies on polish/export.
 func EnsureTracks(wiki *models.Wiki) {
 	if wiki == nil {
 		return
 	}
 	for i := range wiki.Pages {
 		p := &wiki.Pages[i]
-		tr := p.Track
-		if tr != models.TrackFoundation && tr != models.TrackBusiness && tr != models.TrackTechnical {
-			p.Track = models.InferTrack(*p)
-		}
+		p.Track = models.InferTrack(*p)
 	}
 }
 
 // RebalanceDualRail ensures Track coverage and soft-merges foundation/business
-// pages from seed when the free LLM catalog is thin on those rails.
-// Does not rewrite LLM titles; respects maxPages (0 = no cap beyond merge size).
+// pages from seed only when those rails are truly thin.
+// Does not inject fixed engineering templates — structure comes from seed/scan.
+// Does not rewrite LLM titles; over-cap uses rail-aware trim (not prefix chop).
+// For signal-gated engineering indexes (API/security/ops/test/FAQ), use MergeEngineeringSeeds.
 func RebalanceDualRail(wiki, seed *models.Wiki, maxPages int) {
 	if wiki == nil {
 		return
 	}
 	EnsureTracks(wiki)
 	if seed == nil || len(seed.Pages) == 0 {
+		if maxPages > 0 {
+			TrimWikiByRail(wiki, maxPages)
+		}
 		return
 	}
 	EnsureTracks(seed)
@@ -172,27 +352,57 @@ func RebalanceDualRail(wiki, seed *models.Wiki, maxPages int) {
 		}
 		return n
 	}
+	total := len(wiki.Pages)
 	bizN := count(models.TrackBusiness)
 	foundN := count(models.TrackFoundation)
 
-	// Soft floors: keep dual-rail readable after free planning.
-	wantBiz := 4
+	// Seed must actually offer business pages (real path clusters), else accept thin biz rail.
+	seedBiz := 0
+	for _, p := range seed.Pages {
+		if p.Track == models.TrackBusiness {
+			seedBiz++
+		}
+	}
+
+	// Soft floors: repair empty foundation or thin business.
+	// Absolute count + share both matter — a 1/3 biz ratio still needs top-up
+	// when the free catalog only listed one capability page.
+	// Avoid polluting healthy catalogs with low-quality path-humanize titles.
 	wantFound := 1
-	if maxPages > 0 {
-		// Scale floors lightly with budget.
-		if maxPages >= 80 && wantBiz < 8 {
-			wantBiz = 8
+	wantBiz := 0
+	if seedBiz > 0 {
+		// Absolute soft target scales with maxPages (and seed supply).
+		absTarget := 3
+		if maxPages >= 80 {
+			absTarget = 6
+		} else if maxPages > 0 && maxPages < 40 {
+			absTarget = 2
+		}
+		absTarget = minInt(absTarget, seedBiz)
+
+		ratioThin := total > 0 && float64(bizN)/float64(total) < 0.20
+		countThin := bizN < absTarget
+		if total == 0 || bizN == 0 || ratioThin || countThin {
+			wantBiz = absTarget
+			// When only slightly thin, top up modestly rather than jump to full target.
+			if bizN > 0 && wantBiz > bizN+4 {
+				wantBiz = bizN + 4
+			}
+			wantBiz = minInt(wantBiz, seedBiz)
 		}
 	}
 
 	need := map[string]int{}
-	if bizN < wantBiz {
-		need[models.TrackBusiness] = wantBiz - bizN
-	}
 	if foundN < wantFound {
 		need[models.TrackFoundation] = wantFound - foundN
 	}
+	if wantBiz > 0 && bizN < wantBiz {
+		need[models.TrackBusiness] = wantBiz - bizN
+	}
 	if len(need) == 0 {
+		if maxPages > 0 {
+			TrimWikiByRail(wiki, maxPages)
+		}
 		return
 	}
 
@@ -215,24 +425,24 @@ func RebalanceDualRail(wiki, seed *models.Wiki, maxPages int) {
 		if seen[key] || (p.ContentPath != "" && seen["path:"+p.ContentPath]) {
 			continue
 		}
-		// Skip inventory-style seed pages on technical rail even if mis-tagged.
+		// Only soft-merge foundation/business rails; technical pages stay LLM/scan-owned.
 		if p.Track == models.TrackTechnical {
+			continue
+		}
+		// Skip low-quality path mirrors when soft-merging into an existing catalog.
+		if isLowQuality(p.Title) {
 			continue
 		}
 		add = append(add, p)
 		seen[key] = true
 		need[p.Track]--
 	}
-	if len(add) == 0 {
-		return
+	if len(add) > 0 {
+		wiki.Pages = append(wiki.Pages, add...)
 	}
-	wiki.Pages = append(wiki.Pages, add...)
-	if maxPages > 0 && len(wiki.Pages) > maxPages {
-		// Prefer keeping original LLM pages first; trim from end of soft-adds.
-		// If already over before adds, leave earlier soft cap to caller.
-		wiki.Pages = wiki.Pages[:maxPages]
+	if maxPages > 0 {
+		TrimWikiByRail(wiki, maxPages)
 	}
-	// Re-number slugs for uniqueness after merge.
 	for i := range wiki.Pages {
 		if wiki.Pages[i].Slug == "" {
 			wiki.Pages[i].Slug = models.MakeSlug(i+1, wiki.Pages[i].Title)
@@ -241,7 +451,146 @@ func RebalanceDualRail(wiki, seed *models.Wiki, maxPages int) {
 	EnsureTracks(wiki)
 }
 
-// FormatSeedXML renders planned pages as catalog XML seed for the catalog agent.
+
+// MergeEngineeringSeeds soft-merges signal-gated generic engineering index pages
+// (API / security / deploy / test / FAQ / performance / coding standards / config)
+// into an existing catalog when those topics are missing.
+//
+// Driven only by scan signals — no product domain names. Safe for polish on
+// older LLM catalogs that omitted engineering coverage. Prefers section index
+// pages; inventory class mirrors are never injected. Returns count added.
+func MergeEngineeringSeeds(wiki *models.Wiki, model *scan.Model, maxPages int) int {
+	if wiki == nil || model == nil {
+		return 0
+	}
+	EnsureTracks(wiki)
+	zh := model.Language != "en"
+	seed := buildDefaultTree(model, zh, 0)
+	seenTitle := map[string]bool{}
+	seenSectionEng := map[string]bool{}
+	for _, p := range wiki.Pages {
+		key := strings.ToLower(strings.TrimSpace(p.Title))
+		seenTitle[key] = true
+		if isEngineeringSection(p.Section) || isEngineeringSection(p.Title) {
+			seenSectionEng[strings.ToLower(strings.TrimSpace(p.Section))] = true
+			seenSectionEng[strings.ToLower(strings.TrimSpace(p.Title))] = true
+		}
+	}
+
+	var add []models.WikiPage
+	for _, it := range seed {
+		if !isEngineeringCategory(it.Category) {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(it.Title))
+		if seenTitle[key] {
+			continue
+		}
+		secKey := strings.ToLower(strings.TrimSpace(it.Section))
+		isIndex := it.Title == it.Section || it.Parent == ""
+		if !isIndex {
+			// Children only after parent index is present or just added.
+			parentKey := strings.ToLower(strings.TrimSpace(it.Parent))
+			if parentKey == "" {
+				parentKey = secKey
+			}
+			if !seenTitle[parentKey] && !seenSectionEng[secKey] {
+				continue
+			}
+		} else if seenSectionEng[secKey] {
+			// Index: skip if any page already sits in this engineering section.
+			continue
+		}
+		if isLowQuality(it.Title) {
+			continue
+		}
+		track := it.Track
+		if track == "" {
+			track = trackForCategory(it.Category, it.Section)
+		}
+		page := models.WikiPage{
+			Title:           it.Title,
+			Slug:            models.MakeSlug(len(wiki.Pages)+len(add)+1, it.Title),
+			Level:           it.Level,
+			Section:         it.Section,
+			Group:           it.Group,
+			Parent:          it.Parent,
+			Goal:            it.Goal,
+			DependentFiles:  it.DependentFiles,
+			ContentPath:     it.ContentPath,
+			DescriptionSlug: DescriptionSlug(it.Title),
+			Track:           track,
+		}
+		if page.Level == "" {
+			page.Level = "Intermediate"
+		}
+		add = append(add, page)
+		seenTitle[key] = true
+		seenSectionEng[secKey] = true
+		if len(add) >= 24 {
+			break
+		}
+	}
+	if len(add) == 0 {
+		return 0
+	}
+	wiki.Pages = append(wiki.Pages, add...)
+	if maxPages > 0 {
+		TrimWikiByRail(wiki, maxPages)
+	}
+	for i := range wiki.Pages {
+		if wiki.Pages[i].Slug == "" {
+			wiki.Pages[i].Slug = models.MakeSlug(i+1, wiki.Pages[i].Title)
+		}
+	}
+	EnsureTracks(wiki)
+	return len(add)
+}
+
+// isEngineeringCategory marks signal-gated technical seed categories.
+func isEngineeringCategory(cat string) bool {
+	switch cat {
+	case "api", "data", "config", "security", "ops", "guide", "architecture":
+		return true
+	}
+	return false
+}
+
+// isEngineeringSection detects generic engineering section labels (CN + EN).
+func isEngineeringSection(s string) bool {
+	if s == "" {
+		return false
+	}
+	keys := []string{
+		"API接口", "接口文档", "API Documentation", "API",
+		"数据模型", "数据库", "Data Model", "Database",
+		"配置管理", "Configuration",
+		"安全与访问", "Security",
+		"部署与运维", "部署", "运维", "Deploy", "Operations", "Ops",
+		"测试与质量", "Testing",
+		"性能与扩展", "Performance",
+		"故障排查", "Troubleshooting",
+		"常见问题", "FAQ",
+		"开发指南", "Developer Guide",
+		"编码规范", "Coding",
+		"系统架构", "Architecture",
+	}
+	for _, k := range keys {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func FormatSeedXML(wiki *models.Wiki) string {
 	if wiki == nil || len(wiki.Pages) == 0 {
 		return ""
@@ -305,7 +654,12 @@ func fromAllowlist(docs []wikiplan.Document, max int) *models.Wiki {
 	for _, d := range docs {
 		sec := d.Parent
 		if sec == "" {
-			sec = "Get Started"
+			sec = d.Title
+		}
+		// Multi-level path: section/title when parent present.
+		cpath := safeSegment(d.Title) + ".md"
+		if d.Parent != "" && d.Parent != d.Title {
+			cpath = safeSegment(d.Parent) + "/" + safeSegment(d.Title) + ".md"
 		}
 		items = append(items, Planned{
 			Title:       d.Title,
@@ -314,13 +668,16 @@ func fromAllowlist(docs []wikiplan.Document, max int) *models.Wiki {
 			Goal:        d.Goal,
 			Level:       "Intermediate",
 			Track:       models.InferTrack(models.WikiPage{Title: d.Title, Section: sec, Goal: d.Goal}),
-			ContentPath: safeSegment(d.Title) + ".md",
+			ContentPath: cpath,
 		})
-		if len(items) >= max {
+		if max > 0 && len(items) >= max {
 			break
 		}
 	}
-	return toWiki(items)
+	wiki := toWiki(items)
+	ApplyHierarchyPaths(wiki)
+	EnsureTracks(wiki)
+	return wiki
 }
 
 func toWiki(items []Planned) *models.Wiki {
@@ -342,6 +699,7 @@ func toWiki(items []Planned) *models.Wiki {
 			Group:           it.Group,
 			Parent:          it.Parent,
 			Goal:            it.Goal,
+			DependentFiles:  it.DependentFiles,
 			ContentPath:     it.ContentPath,
 			DescriptionSlug: DescriptionSlug(it.Title),
 			Track:           track,
@@ -356,47 +714,25 @@ type taxonomy struct {
 }
 
 func chooseTaxonomy(model *scan.Model, zh bool) taxonomy {
-	joined := ""
-	if model != nil {
-		for _, f := range model.Files {
-			joined += f.RelativePath + "\n"
-		}
-	}
-	businessHeavy := match(joined, `credit|loan|bill|pay|order|invoice|scf|finance|account|cash|risk|cust|kri|ice|audit|grc|授信|贷款|票据|支付|账款|风控|客户|审计`)
-	dbHeavy := match(joined, `sql|mapper|dao|entity|schema|migration|mybatis|hibernate|jpa`)
-	domainHeavy := match(joined, `entity|domain|dto|model|vo`)
-	javaWeb := match(joined, `servlet|spring|controller|web\.xml|dispatcher-servlet`)
-	multiModule := match(joined, `dfap|bsp|microservice|ncb-ilp`) || (model != nil && len(model.Modules) >= 6)
-	monolithBusiness := zh && businessHeavy && javaWeb && !multiModule
-
+	// Stable, language-only labels — no product codenames or domain word lists.
 	if !zh {
 		return taxonomy{
 			modules: "Core Modules", architecture: "System Architecture", api: "API Documentation",
 			data: "Data Model Design", ops: "Deployment and Operations", troubleshooting: "Troubleshooting",
 		}
 	}
-	t := taxonomy{
+	return taxonomy{
 		modules: "核心模块详解", architecture: "系统架构设计", api: "API接口文档",
 		data: "数据模型设计", ops: "部署与运维", troubleshooting: "故障排查",
 	}
-	if monolithBusiness {
-		t.modules = "核心业务模块"
-		t.architecture = "架构设计"
-		t.api = "接口文档"
-		t.data = "数据库设计"
-		t.troubleshooting = "故障排查与维护"
-	} else if javaWeb && !multiModule {
-		t.architecture = "架构设计"
-		t.api = "接口文档"
-	}
-	if (dbHeavy && !domainHeavy) || monolithBusiness {
-		t.data = "数据库设计"
-	}
-	return t
 }
 
-func buildDefaultTree(model *scan.Model, zh bool) []Planned {
+// buildDefaultTree seeds foundation + technical skeleton pages from scan signals.
+// techBudget (0 = unknown) lets the module-children cap scale with the technical
+// rail budget; all other seeding is budget-independent.
+func buildDefaultTree(model *scan.Model, zh bool, techBudget int) []Planned {
 	tax := chooseTaxonomy(model, zh)
+	sig := detectRepoSignals(model)
 	var out []Planned
 	push := func(p Planned) {
 		if p.Title == "" {
@@ -413,6 +749,7 @@ func buildDefaultTree(model *scan.Model, zh bool) []Planned {
 		out = append(out, p)
 	}
 
+	// Universal foundation — every repo needs orientation + first run.
 	if zh {
 		push(Planned{Title: "项目概述", Section: "项目概述", Category: "overview", Goal: "描述项目定位、核心价值、模块边界与目标用户。", ContentPath: "项目概述.md", Level: "Beginner"})
 		push(Planned{Title: "快速开始", Section: "快速开始", Category: "getting-started", Goal: "说明环境准备、安装构建与最小可运行步骤。", ContentPath: "快速开始.md", Level: "Beginner"})
@@ -421,35 +758,80 @@ func buildDefaultTree(model *scan.Model, zh bool) []Planned {
 		push(Planned{Title: "Getting Started", Section: "Getting Started", Category: "getting-started", Goal: "Explain setup and minimal run steps.", ContentPath: "getting-started.md", Level: "Beginner"})
 	}
 
-	// Architecture section + children
+	// Architecture — always one index; children only when structure signals justify depth.
 	arch := tax.architecture
 	push(Planned{Title: arch, Section: arch, Category: "architecture", Goal: goal(zh, "给出系统整体架构、分层关系与关键路径。", "Overall architecture and layering."), ContentPath: arch + "/" + arch + ".md", Level: "Intermediate"})
-	archKids := []string{"整体架构设计", "模块划分原则", "数据流架构", "组件交互关系", "分层架构设计", "部署架构"}
-	if !zh {
-		archKids = []string{"Overall Architecture", "Module Boundaries", "Data Flow Architecture", "Component Interactions", "Layered Architecture", "Deployment Architecture"}
+	// Expand architecture kids only for multi-module or layered layouts.
+	if sig.multiModule || sig.hasAPI || sig.hasData {
+		archKidsZH := []string{"整体架构设计", "模块划分原则"}
+		archKidsEN := []string{"Overall Architecture", "Module Boundaries"}
+		if sig.hasData {
+			archKidsZH = append(archKidsZH, "数据流架构")
+			archKidsEN = append(archKidsEN, "Data Flow Architecture")
+		}
+		if sig.hasAPI {
+			archKidsZH = append(archKidsZH, "组件交互关系")
+			archKidsEN = append(archKidsEN, "Component Interactions")
+		}
+		if sig.hasDeploy {
+			archKidsZH = append(archKidsZH, "部署架构")
+			archKidsEN = append(archKidsEN, "Deployment Architecture")
+		}
+		kids := archKidsZH
+		if !zh {
+			kids = archKidsEN
+		}
+		for _, k := range kids {
+			push(Planned{Title: k, Section: arch, Group: arch, Parent: arch, Category: "architecture", Goal: k, ContentPath: arch + "/" + k + ".md", Level: "Intermediate"})
+		}
 	}
-	for _, k := range archKids {
-		push(Planned{Title: k, Section: arch, Group: arch, Parent: arch, Category: "architecture", Goal: k, ContentPath: arch + "/" + k + ".md", Level: "Intermediate"})
-	}
-
-	// Modules (index only — domain pages come from buildBusinessDomains)
-	mod := tax.modules
-	push(Planned{Title: mod, Section: mod, Category: "modules", Goal: goal(zh, "索引核心业务/技术模块及其职责。", "Index core modules."), ContentPath: mod + "/" + mod + ".md", Level: "Intermediate"})
-	if model != nil {
-		// Prefer humanized module pages only for top-level multi-module layouts (few pages).
-		for i, m := range model.Modules {
+	// Multi-root repos: one architecture child per manifest root (structural, not product-derived).
+	if roots := multiManifestRoots(model); len(roots) >= 2 {
+		for i, r := range roots {
 			if i >= 8 {
 				break
 			}
-			title := composeChineseTitle(m.Name, "module")
-			if !zh {
-				title = humanize(m.Name)
+			rb := pathBase(r)
+			title := humanize(rb)
+			if isLowQuality(title) {
+				title = rb
+			}
+			safe := safeSegment(title)
+			push(Planned{
+				Title: title, Section: arch, Group: arch, Parent: arch, Category: "architecture",
+				Goal:        goal(zh, "说明子模块 "+r+" 在整体架构中的角色、边界与依赖。", "Architecture role, boundary and dependencies of module root "+r+"."),
+				ContentPath: arch + "/" + safe + ".md", Level: "Intermediate",
+			})
+		}
+	}
+
+	// Modules index only when scan found real modules (not fixed product modules).
+	mod := tax.modules
+	if model != nil && len(model.Modules) > 0 {
+		// Cap module children at 8 by default; when the technical rail budget is
+		// generous (>=24 pages) allow up to min(12, module count) — breadth scaling.
+		modCap := 8
+		if techBudget >= 24 && len(model.Modules) > modCap {
+			modCap = minInt(12, len(model.Modules))
+		}
+		push(Planned{Title: mod, Section: mod, Category: "modules", Goal: goal(zh, "索引仓库模块及其职责。", "Index repository modules."), ContentPath: mod + "/" + mod + ".md", Level: "Intermediate"})
+		for i, m := range model.Modules {
+			if i >= modCap {
+				break
+			}
+			// Module directories named after well-known libraries are committed
+			// third-party trees, not project modules.
+			if evidence.IsKnownVendorLib(m.Name) || evidence.IsKnownVendorLib(pathBase(m.Path)) {
+				continue
+			}
+			title := humanize(m.Name)
+			if zh {
+				title = composeChineseTitle(m.Name, "module")
 			}
 			if isLowQuality(title) {
 				title = m.Name
 			}
-			// Skip trivial single-word technical shells that mirror package noise.
-			if match(title, `^(模块|Common|App|Api|Web|Core)(模块)?$`) {
+			if match(title, `^(模块|Common|App|Api|Web|Core|Module)(模块)?$`) {
 				continue
 			}
 			safe := safeSegment(title)
@@ -461,34 +843,476 @@ func buildDefaultTree(model *scan.Model, zh bool) []Planned {
 		}
 	}
 
-	// Dev guide / API index / data index / security / ops / troubleshooting
+	// Developer guide — one index always; children only for non-trivial repos.
+	fileN := 0
+	if model != nil {
+		fileN = len(model.Files)
+	}
 	if zh {
 		push(Planned{Title: "开发指南", Section: "开发指南", Category: "guide", Goal: "开发规范、目录与技术栈。", ContentPath: "开发指南/开发指南.md", Level: "Beginner"})
-		push(Planned{Title: "目录结构", Section: "开发指南", Group: "开发指南", Parent: "开发指南", Goal: "说明仓库目录布局。", ContentPath: "开发指南/目录结构.md", Level: "Beginner"})
-		push(Planned{Title: "技术栈与依赖", Section: "开发指南", Group: "开发指南", Parent: "开发指南", Goal: "列出主要依赖与运行时。", ContentPath: "开发指南/技术栈与依赖.md", Level: "Beginner"})
-		// API / data stay as index pages; detailed inventory is budget-capped elsewhere.
-		push(Planned{Title: tax.api, Section: tax.api, Category: "api", Goal: "汇总对外接口能力与调用约定（按业务主题索引，避免逐类罗列）。", ContentPath: tax.api + "/" + tax.api + ".md", Level: "Intermediate"})
-		push(Planned{Title: "接口设计原则", Section: tax.api, Group: tax.api, Parent: tax.api, Category: "api", Goal: "统一说明鉴权、分页、错误码与版本策略。", ContentPath: tax.api + "/接口设计原则.md", Level: "Intermediate"})
-		push(Planned{Title: tax.data, Section: tax.data, Category: "data", Goal: "数据模型与持久化总览（按领域聚合，避免逐表罗列）。", ContentPath: tax.data + "/" + tax.data + ".md", Level: "Intermediate"})
-		push(Planned{Title: "配置管理", Section: "配置管理", Category: "config", Goal: "配置项与环境差异。", ContentPath: "配置管理.md", Level: "Intermediate"})
-		push(Planned{Title: "安全设计", Section: "安全设计", Category: "security", Goal: "认证授权与安全边界。", ContentPath: "安全设计.md", Level: "Advanced"})
-		push(Planned{Title: tax.ops, Section: tax.ops, Category: "ops", Goal: "部署与运维要点。", ContentPath: tax.ops + ".md", Level: "Intermediate"})
-		push(Planned{Title: tax.troubleshooting, Section: tax.troubleshooting, Category: "ops", Goal: "常见故障与排查。", ContentPath: tax.troubleshooting + ".md", Level: "Intermediate"})
+		if fileN >= 12 || sig.multiModule {
+			push(Planned{Title: "目录结构", Section: "开发指南", Group: "开发指南", Parent: "开发指南", Goal: "说明仓库目录布局。", ContentPath: "开发指南/目录结构.md", Level: "Beginner"})
+			push(Planned{Title: "技术栈与依赖", Section: "开发指南", Group: "开发指南", Parent: "开发指南", Goal: "列出主要依赖与运行时。", ContentPath: "开发指南/技术栈与依赖.md", Level: "Beginner"})
+		}
 	} else {
 		push(Planned{Title: "Developer Guide", Section: "Developer Guide", Category: "guide", Goal: "Coding conventions and layout.", ContentPath: "developer-guide/developer-guide.md", Level: "Beginner"})
-		push(Planned{Title: tax.api, Section: tax.api, Category: "api", Goal: "API surface overview (business-indexed).", ContentPath: "api-documentation/api-documentation.md", Level: "Intermediate"})
-		push(Planned{Title: tax.data, Section: tax.data, Category: "data", Goal: "Data models overview.", ContentPath: "data-model-design/data-model-design.md", Level: "Intermediate"})
-		push(Planned{Title: "Security Design", Section: "Security Design", Category: "security", Goal: "Auth and security.", ContentPath: "security-design.md", Level: "Advanced"})
-		push(Planned{Title: tax.ops, Section: tax.ops, Category: "ops", Goal: "Deploy and ops.", ContentPath: "deployment-and-operations.md", Level: "Intermediate"})
-		push(Planned{Title: tax.troubleshooting, Section: tax.troubleshooting, Category: "ops", Goal: "Troubleshooting.", ContentPath: "troubleshooting.md", Level: "Intermediate"})
+		if fileN >= 12 || sig.multiModule {
+			push(Planned{Title: "Directory layout", Section: "Developer Guide", Group: "Developer Guide", Parent: "Developer Guide", Goal: "Repository layout.", ContentPath: "developer-guide/directory-layout.md", Level: "Beginner"})
+			push(Planned{Title: "Tech stack and dependencies", Section: "Developer Guide", Group: "Developer Guide", Parent: "Developer Guide", Goal: "Dependencies and runtime.", ContentPath: "developer-guide/tech-stack.md", Level: "Beginner"})
+		}
+	}
+
+	// Signal-driven technical indexes — generic engineering topics only (no product names).
+	// Prefer section index pages + a few scan-justified children so Qoder-style
+	// engineering coverage (API/security/deploy/test/FAQ) is present without hardcoding domains.
+	if sig.hasAPI {
+		push(Planned{Title: tax.api, Section: tax.api, Category: "api", Goal: goal(zh, "汇总对外接口能力与调用约定（按真实包/路径聚合）。", "API surface overview aggregated from the codebase."), ContentPath: tax.api + "/" + tax.api + ".md", Level: "Intermediate"})
+		if zh {
+			push(Planned{Title: "接口设计约定", Section: tax.api, Group: tax.api, Parent: tax.api, Category: "api", Goal: "接口分层、错误码与版本约定（以代码为准）。", ContentPath: tax.api + "/接口设计约定.md", Level: "Intermediate"})
+			if sig.hasAuth {
+				push(Planned{Title: "接口鉴权与限流", Section: tax.api, Group: tax.api, Parent: tax.api, Category: "api", Goal: "鉴权、会话与限流相关入口。", ContentPath: tax.api + "/接口鉴权与限流.md", Level: "Advanced"})
+			}
+		} else {
+			push(Planned{Title: "API design conventions", Section: tax.api, Group: tax.api, Parent: tax.api, Category: "api", Goal: "Layering, errors and versioning as found in code.", ContentPath: tax.api + "/api-design-conventions.md", Level: "Intermediate"})
+			if sig.hasAuth {
+				push(Planned{Title: "API auth and rate limits", Section: tax.api, Group: tax.api, Parent: tax.api, Category: "api", Goal: "Auth, session and rate-limit entry points.", ContentPath: tax.api + "/api-auth-and-rate-limits.md", Level: "Advanced"})
+			}
+		}
+	}
+	if sig.hasData {
+		push(Planned{Title: tax.data, Section: tax.data, Category: "data", Goal: goal(zh, "数据模型与持久化总览（按领域包聚合）。", "Data models overview aggregated from the codebase."), ContentPath: tax.data + "/" + tax.data + ".md", Level: "Intermediate"})
+		if zh {
+			push(Planned{Title: "持久化与访问层", Section: tax.data, Group: tax.data, Parent: tax.data, Category: "data", Goal: "DAO/Mapper/Repository 访问路径。", ContentPath: tax.data + "/持久化与访问层.md", Level: "Intermediate"})
+		} else {
+			push(Planned{Title: "Persistence and access layer", Section: tax.data, Group: tax.data, Parent: tax.data, Category: "data", Goal: "DAO/mapper/repository access paths.", ContentPath: tax.data + "/persistence-and-access-layer.md", Level: "Intermediate"})
+		}
+	}
+	if sig.hasConfig {
+		cfgDeps := capDeps(sig.ConfigFiles, 8)
+		if zh {
+			push(Planned{Title: "配置管理", Section: "配置管理", Category: "config", Goal: "配置项与环境差异（以仓库实际配置为准）。", ContentPath: "配置管理/配置管理.md", Level: "Intermediate", DependentFiles: cfgDeps})
+			push(Planned{Title: "环境与配置差异", Section: "配置管理", Group: "配置管理", Parent: "配置管理", Category: "config", Goal: "多环境配置与覆盖关系。", ContentPath: "配置管理/环境与配置差异.md", Level: "Intermediate", DependentFiles: cfgDeps})
+		} else {
+			push(Planned{Title: "Configuration", Section: "Configuration", Category: "config", Goal: "Configuration and environment differences as found in the repo.", ContentPath: "configuration/configuration.md", Level: "Intermediate", DependentFiles: cfgDeps})
+			push(Planned{Title: "Environment differences", Section: "Configuration", Group: "Configuration", Parent: "Configuration", Category: "config", Goal: "Multi-env config overlays.", ContentPath: "configuration/environment-differences.md", Level: "Intermediate", DependentFiles: cfgDeps})
+		}
+	}
+	if sig.hasAuth {
+		if zh {
+			push(Planned{Title: "安全与访问控制", Section: "安全与访问控制", Category: "security", Goal: "仓库中实际存在的认证/授权/访问控制机制。", ContentPath: "安全与访问控制/安全与访问控制.md", Level: "Advanced"})
+			push(Planned{Title: "认证与授权机制", Section: "安全与访问控制", Group: "安全与访问控制", Parent: "安全与访问控制", Category: "security", Goal: "登录、令牌与权限校验入口。", ContentPath: "安全与访问控制/认证与授权机制.md", Level: "Advanced"})
+		} else {
+			push(Planned{Title: "Security and access control", Section: "Security and access control", Category: "security", Goal: "Auth and access control mechanisms present in the repo.", ContentPath: "security-and-access-control/security-and-access-control.md", Level: "Advanced"})
+			push(Planned{Title: "Authentication and authorization", Section: "Security and access control", Group: "Security and access control", Parent: "Security and access control", Category: "security", Goal: "Login, token and permission entry points.", ContentPath: "security-and-access-control/authentication-and-authorization.md", Level: "Advanced"})
+		}
+	}
+	if sig.hasDeploy || sig.hasOps {
+		opsIdxDeps := capDeps(append(append([]string{}, sig.DeployFiles...), sig.OpsFiles...), 8)
+		deployDeps := capDeps(sig.DeployFiles, 8)
+		opsDeps := capDeps(sig.OpsFiles, 8)
+		push(Planned{Title: tax.ops, Section: tax.ops, Category: "ops", Goal: goal(zh, "部署与运维要点（以仓库构建/脚本为准）。", "Deploy and ops based on repo build/scripts."), ContentPath: tax.ops + "/" + tax.ops + ".md", Level: "Intermediate", DependentFiles: opsIdxDeps})
+		if zh {
+			if sig.hasDeploy {
+				push(Planned{Title: "构建与发布", Section: tax.ops, Group: tax.ops, Parent: tax.ops, Category: "ops", Goal: "构建脚本、镜像与发布入口。", ContentPath: tax.ops + "/构建与发布.md", Level: "Intermediate", DependentFiles: deployDeps})
+			}
+			if sig.hasOps {
+				push(Planned{Title: "监控与任务调度", Section: tax.ops, Group: tax.ops, Parent: tax.ops, Category: "ops", Goal: "监控、定时任务与运维脚本。", ContentPath: tax.ops + "/监控与任务调度.md", Level: "Intermediate", DependentFiles: opsDeps})
+			}
+		} else {
+			if sig.hasDeploy {
+				push(Planned{Title: "Build and release", Section: tax.ops, Group: tax.ops, Parent: tax.ops, Category: "ops", Goal: "Build scripts, images and release entry points.", ContentPath: tax.ops + "/build-and-release.md", Level: "Intermediate", DependentFiles: deployDeps})
+			}
+			if sig.hasOps {
+				push(Planned{Title: "Monitoring and scheduling", Section: tax.ops, Group: tax.ops, Parent: tax.ops, Category: "ops", Goal: "Monitoring, jobs and ops scripts.", ContentPath: tax.ops + "/monitoring-and-scheduling.md", Level: "Intermediate", DependentFiles: opsDeps})
+			}
+		}
+	}
+	if sig.hasTests {
+		testDeps := capDeps(sig.TestFiles, 8)
+		if zh {
+			push(Planned{Title: "测试与质量", Section: "测试与质量", Category: "guide", Goal: "仓库中的测试布局与质量门禁入口。", ContentPath: "测试与质量/测试与质量.md", Level: "Intermediate", DependentFiles: testDeps})
+			push(Planned{Title: "测试布局与运行", Section: "测试与质量", Group: "测试与质量", Parent: "测试与质量", Category: "guide", Goal: "单元/集成测试目录与运行方式。", ContentPath: "测试与质量/测试布局与运行.md", Level: "Intermediate", DependentFiles: testDeps})
+		} else {
+			push(Planned{Title: "Testing and quality", Section: "Testing and quality", Category: "guide", Goal: "Test layout and quality gates found in the repo.", ContentPath: "testing-and-quality/testing-and-quality.md", Level: "Intermediate", DependentFiles: testDeps})
+			push(Planned{Title: "Test layout and how to run", Section: "Testing and quality", Group: "Testing and quality", Parent: "Testing and quality", Category: "guide", Goal: "Unit/integration test layout and run commands.", ContentPath: "testing-and-quality/test-layout-and-how-to-run.md", Level: "Intermediate", DependentFiles: testDeps})
+		}
+	}
+	// Performance seed when code volume / multi-module justifies a dedicated page.
+	if fileN >= 80 || sig.multiModule {
+		if zh {
+			push(Planned{Title: "性能与扩展", Section: "性能与扩展", Category: "ops", Goal: "性能关注点、缓存与扩展边界（以代码路径为准）。", ContentPath: "性能与扩展.md", Level: "Advanced"})
+		} else {
+			push(Planned{Title: "Performance and scalability", Section: "Performance and scalability", Category: "ops", Goal: "Perf hotspots, caching and scaling boundaries from the codebase.", ContentPath: "performance-and-scalability.md", Level: "Advanced"})
+		}
+	}
+	// Coding standards as child of developer guide for non-trivial repos.
+	if fileN >= 12 || sig.multiModule {
+		if zh {
+			push(Planned{Title: "编码规范", Section: "开发指南", Group: "开发指南", Parent: "开发指南", Category: "guide", Goal: "命名、分层与代码组织约定。", ContentPath: "开发指南/编码规范.md", Level: "Beginner"})
+		} else {
+			push(Planned{Title: "Coding standards", Section: "Developer Guide", Group: "Developer Guide", Parent: "Developer Guide", Category: "guide", Goal: "Naming, layering and code organisation.", ContentPath: "developer-guide/coding-standards.md", Level: "Beginner"})
+		}
+	}
+	// Typical development tasks — a cookbook page for end-to-end code changes.
+	// Gated on both an API surface and a data layer, and on being able to
+	// evidence a generic role chain from real files (no product vocabulary).
+	if sig.hasAPI && sig.hasData && (fileN >= 12 || sig.multiModule) {
+		if chain := devTaskRoleChain(model); len(chain) >= 2 {
+			if zh {
+				push(Planned{Title: "典型开发任务", Section: "开发指南", Group: "开发指南", Parent: "开发指南", Category: "guide", Goal: "常见改动的端到端路径：涉及文件、修改顺序与验证方式。", ContentPath: "开发指南/典型开发任务.md", Level: "Intermediate", DependentFiles: capDeps(chain, 8)})
+			} else {
+				push(Planned{Title: "Typical development tasks", Section: "Developer Guide", Group: "Developer Guide", Parent: "Developer Guide", Category: "guide", Goal: "End-to-end change paths: files touched, edit order and verification.", ContentPath: "developer-guide/typical-development-tasks.md", Level: "Intermediate", DependentFiles: capDeps(chain, 8)})
+			}
+		}
+	}
+	// Troubleshooting when ops/deploy/tests signals exist — avoid empty shells.
+	if sig.hasOps || sig.hasDeploy || sig.hasTests {
+		push(Planned{Title: tax.troubleshooting, Section: tax.troubleshooting, Category: "ops", Goal: goal(zh, "常见故障与排查入口。", "Troubleshooting entry points."), ContentPath: tax.troubleshooting + ".md", Level: "Intermediate"})
+	}
+	// FAQ for medium+ repos (generic questions, not product-specific).
+	if fileN >= 40 || sig.multiModule {
+		if zh {
+			push(Planned{Title: "常见问题", Section: "常见问题", Category: "guide", Goal: "环境、构建与运行中的高频问题入口。", ContentPath: "常见问题.md", Level: "Beginner"})
+		} else {
+			push(Planned{Title: "FAQ", Section: "FAQ", Category: "guide", Goal: "Common setup, build and run questions.", ContentPath: "faq.md", Level: "Beginner"})
+		}
+	}
+
+	return out
+}
+
+// repoSignals are boolean capabilities inferred from scan inventory only.
+// They gate optional technical sections — never hard-code product domain pages.
+// The *Files slices carry representative evidence paths (sorted, capped) so
+// engineering seed pages can pre-bind DependentFiles.
+type repoSignals struct {
+	hasAPI, hasData, hasConfig, hasAuth, hasDeploy, hasOps, hasTests, multiModule bool
+
+	DeployFiles []string
+	OpsFiles    []string
+	TestFiles   []string
+	ConfigFiles []string
+}
+
+// signalFileCap bounds each collected evidence list in repoSignals.
+const signalFileCap = 12
+
+func detectRepoSignals(model *scan.Model) repoSignals {
+	var s repoSignals
+	if model == nil {
+		return s
+	}
+	vd := evidence.NewVendorDetector(model, nil)
+	apiN, dataN, cfgN, authN, deployN, opsN, testN := 0, 0, 0, 0, 0, 0, 0
+	for _, f := range model.Files {
+		orig := filepath.ToSlash(f.RelativePath)
+		rel := strings.ToLower(orig)
+		base := strings.ToLower(filepath.Base(rel))
+		// Committed library files must not fake capabilities (vue-router.js
+		// matching `router` would flip hasAPI on a pure front-end drop).
+		if vd.IsVendor(orig) {
+			continue
+		}
+		if scan.IsAPISourceFile(f.RelativePath) || match(rel, `(controller|resource|handler|router|endpoint|action|servlet|restcontroller)`) ||
+			match(base, `(controller|control|resource|handler|endpoint)\.(java|kt|ts|js|go|cs|py)$`) {
+			apiN++
+		}
+		if match(rel, `(entity|domain|model|dto|vo|/po/|mapper|dao|repository|schema|migration|\.sql$|\.bpmn$)`) {
+			dataN++
+		}
+		if match(base, `(application|config|settings|bootstrap|application-\w+)\.(yml|yaml|properties|toml|json)$`) ||
+			match(rel, `(^|/)\.env|(^|/)(config|conf|resources)(/|$)`) ||
+			match(base, `\.(properties|yml|yaml)$`) && match(rel, `(config|conf|resources|spring)`) {
+			cfgN++
+			s.ConfigFiles = append(s.ConfigFiles, orig)
+		}
+		if match(rel, `(auth|security|oauth|jwt|shiro|passport|permission|rbac|login|session|interceptor|filter)`) ||
+			match(base, `(security|auth|login|permission).*\.(java|kt|ts|js|go|cs|py)$`) {
+			authN++
+		}
+		// Deploy from real deploy artifacts + common CI/build scripts.
+		if match(base, `(dockerfile|docker-compose|compose\.ya?ml|chart\.yaml|values\.yaml|jenkinsfile|makefile|\.gitlab-ci\.yml|\.travis\.yml)`) ||
+			match(rel, `(^|/)(deploy|deployment|k8s|helm|terraform|ansible|ci|cd|\.github/workflows|\.gitlab|\.circleci)(/|$)`) ||
+			match(base, `(pom\.xml|build\.gradle|package\.json|go\.mod)$`) && len(model.Modules) >= 2 {
+			deployN++
+			s.DeployFiles = append(s.DeployFiles, orig)
+		}
+		if match(rel, `(ops|monitor|metric|prometheus|grafana|quartz|schedule|cron|job|actuator|health)`) {
+			opsN++
+			s.OpsFiles = append(s.OpsFiles, orig)
+		}
+		if match(rel, `(^|/)(test|tests|__tests__|spec)/`) || match(base, `_test\.(go|py|ts|js|java)$|\.spec\.(ts|js)$|test\.(ts|js|py)$|tests?\.java$`) {
+			testN++
+			s.TestFiles = append(s.TestFiles, orig)
+		}
+	}
+	for _, lst := range []*[]string{&s.DeployFiles, &s.OpsFiles, &s.TestFiles, &s.ConfigFiles} {
+		sort.Strings(*lst)
+		if len(*lst) > signalFileCap {
+			*lst = (*lst)[:signalFileCap]
+		}
+	}
+	// Thresholds: one strong hit is enough for API/data; config/auth/ops need a bit more signal noise control.
+	s.hasAPI = apiN >= 1
+	s.hasData = dataN >= 1
+	s.hasConfig = cfgN >= 1
+	s.hasAuth = authN >= 1
+	s.hasDeploy = deployN >= 1
+	s.hasOps = opsN >= 1
+	s.hasTests = testN >= 1
+	// Multi-module: manifest roots are the authoritative structural signal;
+	// fall back to derived Modules only when no manifest roots were scanned.
+	if len(model.ManifestRoots) >= 2 {
+		s.multiModule = true
+	} else if len(model.ManifestRoots) == 0 && len(model.Modules) >= 2 {
+		s.multiModule = true
+	}
+	// Multi-module Java/Maven trees almost always have deploy/build story even without Dockerfile.
+	if s.multiModule && (apiN > 0 || dataN > 0) {
+		s.hasDeploy = true
+	}
+	return s
+}
+
+// EngineeringEvidence groups representative engineering file paths by category
+// ("deploy" / "ops" / "test" / "config") from scan signals. Callers may use it
+// to pre-bind evidence for engineering pages; categories without hits are omitted.
+func EngineeringEvidence(model *scan.Model) map[string][]string {
+	sig := detectRepoSignals(model)
+	out := map[string][]string{}
+	if len(sig.DeployFiles) > 0 {
+		out["deploy"] = sig.DeployFiles
+	}
+	if len(sig.OpsFiles) > 0 {
+		out["ops"] = sig.OpsFiles
+	}
+	if len(sig.TestFiles) > 0 {
+		out["test"] = sig.TestFiles
+	}
+	if len(sig.ConfigFiles) > 0 {
+		out["config"] = sig.ConfigFiles
 	}
 	return out
 }
 
+// capDeps returns a defensive copy of paths capped at n (nil when empty).
+func capDeps(paths []string, n int) []string {
+	if len(paths) == 0 || n <= 0 {
+		return nil
+	}
+	if len(paths) > n {
+		paths = paths[:n]
+	}
+	out := make([]string, len(paths))
+	copy(out, paths)
+	return out
+}
+
+// devTaskRoleKinds lists generic layering roles in natural edit order. It is a
+// structural convention (entry point -> business logic -> persistence -> data
+// shape), not a product vocabulary.
+var devTaskRoleKinds = []string{"api", "service", "data", "entity"}
+
+// devTaskCodeExt limits the role chain to source files.
+var devTaskCodeExt = map[string]bool{
+	".java": true, ".kt": true, ".go": true, ".ts": true, ".tsx": true,
+	".js": true, ".jsx": true, ".vue": true, ".py": true, ".rb": true,
+	".php": true, ".cs": true, ".scala": true, ".groovy": true,
+}
+
+// devTaskRoleNoise are role/layer words dropped when deriving a file stem.
+var devTaskRoleNoise = map[string]bool{
+	"controller": true, "controllers": true, "resource": true, "handler": true,
+	"router": true, "routes": true, "endpoint": true, "servlet": true,
+	"service": true, "services": true, "serviceimpl": true, "impl": true,
+	"usecase": true, "manager": true, "biz": true, "application": true,
+	"dao": true, "mapper": true, "repository": true, "repo": true,
+	"entity": true, "dto": true, "vo": true, "po": true, "bo": true,
+	"model": true, "domain": true, "api": true, "rest": true, "web": true,
+	"base": true, "abstract": true, "default": true,
+}
+
+// devTaskRoleOf classifies a repo-relative path into one generic layer role,
+// or "" when the path carries no layering signal. Basename conventions win over
+// directory conventions because they are the stronger signal.
+func devTaskRoleOf(rel string) string {
+	base := strings.ToLower(pathBase(rel))
+	switch {
+	case match(base, `(controller|resource|handler|router|endpoint|servlet)`):
+		return "api"
+	case match(base, `(service|usecase|manager|biz)`):
+		return "service"
+	case match(base, `(dao|mapper|repository)`):
+		return "data"
+	case match(base, `(entity|dto|vo|po|bo|model|domain)`):
+		return "entity"
+	}
+	low := strings.ToLower(rel)
+	switch {
+	case match(low, `(^|/)(controller|controllers|handler|handlers|router|routes|api|rest|endpoint|endpoints)/`):
+		return "api"
+	case match(low, `(^|/)(service|services|usecase|usecases|biz|application)/`):
+		return "service"
+	case match(low, `(^|/)(dao|mapper|mappers|repository|repositories|store|persistence)/`):
+		return "data"
+	case match(low, `(^|/)(entity|entities|model|models|domain|dto|vo|po|pojo)/`):
+		return "entity"
+	}
+	return ""
+}
+
+// devTaskStem reduces a file name to its concept tokens by dropping layer words,
+// so FooController / FooService / FooDao collapse to the same stem "foo".
+func devTaskStem(rel string) string {
+	base := pathBase(rel)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	var keep []string
+	for _, t := range splitIdent(base) {
+		lt := strings.ToLower(t)
+		if lt == "" || isDigits(lt) || devTaskRoleNoise[lt] {
+			continue
+		}
+		keep = append(keep, lt)
+	}
+	return strings.Join(keep, "")
+}
+
+// devTaskRoleChain picks real evidence files illustrating an end-to-end change
+// path across generic layers. It prefers a chain sharing one concept stem
+// (FooController -> FooService -> FooDao -> Foo), and falls back to one
+// representative file per role. Returns nil when fewer than two roles are
+// evidenced, so the cookbook page is never planned as an empty shell.
+func devTaskRoleChain(model *scan.Model) []string {
+	if model == nil || len(model.Files) == 0 {
+		return nil
+	}
+	vd := evidence.NewVendorDetector(model, nil)
+	byRole := map[string][]string{}
+	byStem := map[string]map[string]string{}
+	for _, f := range model.Files {
+		orig := filepath.ToSlash(f.RelativePath)
+		// IsVendor assumes noise paths were already dropped during scan, so
+		// re-apply IsNoisePath here: a stray node_modules/**/router.js must not
+		// be able to evidence an api layer.
+		if orig == "" || scan.IsNoisePath(orig) || vd.IsVendor(orig) {
+			continue
+		}
+		if !devTaskCodeExt[strings.ToLower(filepath.Ext(orig))] {
+			continue
+		}
+		role := devTaskRoleOf(orig)
+		if role == "" {
+			continue
+		}
+		byRole[role] = append(byRole[role], orig)
+		if stem := devTaskStem(orig); stem != "" {
+			if byStem[stem] == nil {
+				byStem[stem] = map[string]string{}
+			}
+			if _, seen := byStem[stem][role]; !seen {
+				byStem[stem][role] = orig
+			}
+		}
+	}
+	for _, paths := range byRole {
+		sort.Strings(paths)
+	}
+	// Best same-stem chain: most roles covered, ties broken by stem name for
+	// deterministic output.
+	bestStem, bestCount := "", 0
+	stems := make([]string, 0, len(byStem))
+	for s := range byStem {
+		stems = append(stems, s)
+	}
+	sort.Strings(stems)
+	for _, s := range stems {
+		if n := len(byStem[s]); n > bestCount {
+			bestStem, bestCount = s, n
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	if bestCount >= 2 {
+		for _, role := range devTaskRoleKinds {
+			add(byStem[bestStem][role])
+		}
+	}
+	// Top up with one representative per role still missing from the chain.
+	roles := 0
+	for _, role := range devTaskRoleKinds {
+		if len(byRole[role]) == 0 {
+			continue
+		}
+		roles++
+		if bestCount >= 2 && byStem[bestStem][role] != "" {
+			continue
+		}
+		add(byRole[role][0])
+	}
+	if roles < 2 {
+		return nil
+	}
+	return out
+}
+
+// multiManifestRoots returns the non-"." manifest roots when the repo is truly
+// multi-root (>=2 of them); otherwise nil.
+func multiManifestRoots(model *scan.Model) []string {
+	if model == nil {
+		return nil
+	}
+	var roots []string
+	for _, r := range model.ManifestRoots {
+		r = strings.TrimSpace(filepath.ToSlash(r))
+		if r == "" || r == "." {
+			continue
+		}
+		roots = append(roots, r)
+	}
+	if len(roots) < 2 {
+		return nil
+	}
+	return roots
+}
+
+// pathBase returns the last slash-separated segment of a repo-relative path.
+func pathBase(p string) string {
+	p = strings.TrimSuffix(filepath.ToSlash(p), "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// owningRootBase returns the basename of the deepest manifest root containing
+// rel, or "" when rel is under none of the given roots.
+func owningRootBase(rel string, roots []string) string {
+	rel = filepath.ToSlash(rel)
+	best := ""
+	for _, r := range roots {
+		if rel == r || strings.HasPrefix(rel, r+"/") {
+			if len(r) > len(best) {
+				best = r
+			}
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return pathBase(best)
+}
+
 // buildDefaultTreeSplit returns foundation pages and technical skeleton separately
 // so dual-rail budgets can be applied independently.
-func buildDefaultTreeSplit(model *scan.Model, zh bool) (foundation, technical []Planned) {
-	all := buildDefaultTree(model, zh)
+func buildDefaultTreeSplit(model *scan.Model, zh bool, techBudget int) (foundation, technical []Planned) {
+	all := buildDefaultTree(model, zh, techBudget)
 	for _, p := range all {
 		switch p.Category {
 		case "overview", "getting-started":
@@ -508,124 +1332,81 @@ type fileBag struct {
 	stem string
 }
 
-// domainDef maps package/path tokens to a business section and capability titles.
-type domainDef struct {
-	keys       []string // path tokens (case-insensitive)
-	sectionZH  string
-	sectionEN  string
-	overviewZH string
-	overviewEN string
-	// capability stems → human titles (matched against class stems under the domain)
-	caps map[string]string
-}
-
-var knownDomains = []domainDef{
-	{
-		keys:      []string{"cust", "customer", "client", "crm"},
-		sectionZH: "客户管理模块", sectionEN: "Customer Management",
-		overviewZH: "客户管理模块", overviewEN: "Customer Management Overview",
-		caps: map[string]string{
-			"basic": "客户基本信息管理", "entity": "客户实体与导入功能", "fin": "客户财务数据管理",
-			"follow": "客户跟进与限额管理", "contract": "客户合同与担保管理", "import": "客户实体与导入功能",
-			"debt": "客户财务数据管理", "benefit": "客户财务数据管理", "cash": "客户财务数据管理",
-		},
-	},
-	{
-		keys:      []string{"kri", "kpi", "quota", "indicator", "metric"},
-		sectionZH: "指标监控模块", sectionEN: "Indicator Monitoring",
-		overviewZH: "KRI与指标监控", overviewEN: "KRI and Indicator Monitoring",
-		caps: map[string]string{
-			"element": "KRI要素填报", "quota": "指标值管理", "value": "指标值管理",
-			"flow": "指标审批工作流", "his": "指标历史数据",
-		},
-	},
-	{
-		keys:      []string{"ice", "icebase", "control", "internalcontrol"},
-		sectionZH: "内部控制模块", sectionEN: "Internal Control",
-		overviewZH: "ICE模型概述", overviewEN: "ICE Model Overview",
-		caps: map[string]string{
-			"base": "ICE基础配置", "eval": "ICE评价与缺陷", "defect": "ICE评价与缺陷",
-			"matrix": "ICE矩阵与映射", "test": "ICE测试执行",
-		},
-	},
-	{
-		keys:      []string{"audit", "iir", "internalaudit"},
-		sectionZH: "内部审计模块", sectionEN: "Internal Audit",
-		overviewZH: "内部审计模块", overviewEN: "Internal Audit Overview",
-		caps: map[string]string{
-			"factor": "审计因子管理", "plan": "审计计划管理", "project": "审计项目管理",
-			"find": "审计发现与整改", "report": "审计报告", "syn": "审计因子同步",
-		},
-	},
-	{
-		keys:      []string{"know", "knowledge", "doc", "document"},
-		sectionZH: "知识管理模块", sectionEN: "Knowledge Management",
-		overviewZH: "知识管理模块", overviewEN: "Knowledge Management Overview",
-		caps: map[string]string{
-			"doc": "文档管理系统", "file": "文档管理系统", "catalog": "知识目录与分类",
-			"share": "知识共享与权限",
-		},
-	},
-	{
-		keys:      []string{"risk", "rcsa", "assess"},
-		sectionZH: "风险评估模块", sectionEN: "Risk Assessment",
-		overviewZH: "风险评估模块", overviewEN: "Risk Assessment Overview",
-		caps: map[string]string{
-			"assess": "风险评估流程", "matrix": "风险矩阵", "loss": "损失数据管理",
-		},
-	},
-	{
-		keys:      []string{"flow", "workflow", "bpm", "activiti", "camunda"},
-		sectionZH: "工作流管理", sectionEN: "Workflow Management",
-		overviewZH: "工作流管理", overviewEN: "Workflow Management Overview",
-		caps: map[string]string{
-			"task": "流程任务处理", "def": "流程定义与配置", "his": "流程历史",
-		},
-	},
-	{
-		keys:      []string{"auth", "security", "login", "permission", "role"},
-		sectionZH: "安全架构设计", sectionEN: "Security Architecture",
-		overviewZH: "安全架构设计", overviewEN: "Security Architecture Overview",
-		caps: map[string]string{
-			"login": "认证与登录", "role": "角色与权限", "filter": "安全过滤链",
-		},
-	},
-	{
-		keys:      []string{"ops", "monitor", "quartz", "schedule", "job"},
-		sectionZH: "运营支持模块", sectionEN: "Operations Support",
-		overviewZH: "运营支持模块", overviewEN: "Operations Support Overview",
-		caps: map[string]string{
-			"job": "定时任务与批处理", "log": "日志与审计轨迹", "monitor": "运行监控",
-		},
-	},
-}
-
-// buildBusinessDomains clusters code under known business path tokens into
-// Qoder-style multi-level sections (e.g. 客户管理模块/客户基本信息管理).
-func buildBusinessDomains(model *scan.Model, zh bool) []Planned {
+// buildBusinessDomains clusters code by package/path segments discovered in the
+// scan — no hard-coded product domains. Titles are humanized from real path tokens.
+// bizBudget scales the section cap: clamp(bizBudget/4, 12, 24).
+// Multi-root repos prefix cluster keys with the owning manifest-root basename so
+// same-named packages in different roots stay separate.
+func buildBusinessDomains(model *scan.Model, zh bool, bizBudget int, vd *evidence.VendorDetector) []Planned {
 	if model == nil {
 		return nil
 	}
-	// Collect files per domain key.
-	byDomain := map[int][]fileBag{}
+	if vd == nil {
+		vd = evidence.NewVendorDetector(model, nil)
+	}
+	roots := multiManifestRoots(model)
+	// Group code files by packageDomain (last meaningful path segment).
+	bySeg := map[string][]fileBag{}
 	for _, f := range model.Files {
 		if !scan.IsCodeFile(f.RelativePath) || scan.IsNoisePath(f.RelativePath) {
 			continue
 		}
-		lower := strings.ToLower(filepath.ToSlash(f.RelativePath))
-		stem := strings.TrimSuffix(filepath.Base(f.RelativePath), filepath.Ext(f.RelativePath))
-		for di, d := range knownDomains {
-			for _, k := range d.keys {
-				// Match path segment or package folder, not bare substring in "controller".
-				if match(lower, `/`+regexp.QuoteMeta(k)+`(/|$)`) ||
-					match(lower, `\.`+regexp.QuoteMeta(k)+`\.`) ||
-					match(strings.ToLower(stem), `^`+regexp.QuoteMeta(k)) {
-					byDomain[di] = append(byDomain[di], fileBag{f, stem})
-					goto nextFile
-				}
+		// Committed third-party library files must never seed business domains
+		// (they produce filename-mirror pages like「Encutf16管理」).
+		if vd.IsVendor(f.RelativePath) {
+			continue
+		}
+		// Prefer application code; skip pure tests for domain clustering.
+		rel := strings.ToLower(filepath.ToSlash(f.RelativePath))
+		if match(rel, `(^|/)(test|tests|__tests__|spec)/`) {
+			continue
+		}
+		seg := packageDomain(f.RelativePath)
+		if seg == "" {
+			continue
+		}
+		// Skip ultra-generic shells
+		if match(strings.ToLower(seg), `^(common|util|utils|core|base|shared|internal|pkg|lib|main|app|api|web|config|constant|constants|exception|error|errors)$`) {
+			continue
+		}
+		// Multi-root repos: qualify the cluster key by owning manifest root so
+		// e.g. services/billing/order and services/orders/order do not merge.
+		if len(roots) >= 2 {
+			if rb := owningRootBase(f.RelativePath, roots); rb != "" && !strings.EqualFold(rb, seg) {
+				seg = rb + "/" + seg
 			}
 		}
-	nextFile:
+		stem := strings.TrimSuffix(filepath.Base(f.RelativePath), filepath.Ext(f.RelativePath))
+		bySeg[seg] = append(bySeg[seg], fileBag{f, stem})
+	}
+
+	type sk struct {
+		k string
+		n int
+	}
+	var order []sk
+	for k, files := range bySeg {
+		if len(files) < 3 {
+			continue
+		}
+		order = append(order, sk{k, len(files)})
+	}
+	sort.Slice(order, func(a, b int) bool {
+		if order[a].n != order[b].n {
+			return order[a].n > order[b].n
+		}
+		return order[a].k < order[b].k
+	})
+	// Cap sections so dual-rail budget stays healthy; scale with the business budget.
+	sectionCap := bizBudget / 4
+	if sectionCap < 12 {
+		sectionCap = 12
+	}
+	if sectionCap > 24 {
+		sectionCap = 24
+	}
+	if len(order) > sectionCap {
+		order = order[:sectionCap]
 	}
 
 	var out []Planned
@@ -638,105 +1419,70 @@ func buildBusinessDomains(model *scan.Model, zh bool) []Planned {
 		out = append(out, p)
 	}
 
-	// Sort domain indices by file count desc for stable priority.
-	type dk struct {
-		i, n int
-	}
-	var order []dk
-	for i, files := range byDomain {
-		if len(files) < 3 {
-			continue
-		}
-		order = append(order, dk{i, len(files)})
-	}
-	sort.Slice(order, func(a, b int) bool { return order[a].n > order[b].n })
-	if len(order) > 10 {
-		order = order[:10]
-	}
-
 	for _, o := range order {
-		d := knownDomains[o.i]
-		files := byDomain[o.i]
-		sec := d.sectionZH
-		overview := d.overviewZH
-		if !zh {
-			sec = d.sectionEN
-			overview = d.overviewEN
+		seg := o.k
+		files := bySeg[seg]
+		// Section title from path token only — project-agnostic. Root-qualified
+		// keys ("root/domain") flow through humanize/composeChineseTitle as tokens.
+		titleStem := strings.ReplaceAll(seg, "/", " ")
+		secCore := humanize(titleStem)
+		if zh {
+			secCore = composeChineseTitle(titleStem, "module")
 		}
-		// Section overview page
+		if isLowQuality(secCore) {
+			secCore = humanize(titleStem)
+		}
+		sec := secCore
+		if zh && !strings.HasSuffix(sec, "模块") && !strings.HasSuffix(sec, "服务") && !strings.HasSuffix(sec, "能力") {
+			sec = sec + "模块"
+		}
+		overview := sec
+		if zh {
+			overview = secCore + "概述"
+		} else {
+			overview = secCore + " Overview"
+		}
+
 		add(Planned{
 			Title: overview, Section: sec, Category: "business",
 			Goal: goal(zh,
-				"从业务视角说明「"+sec+"」的能力边界、核心对象与主要流程，并索引子主题。",
-				"Business overview of "+sec+" capabilities and main flows."),
+				"从仓库路径与代码说明「"+sec+"」的职责边界、主要对象与协作关系。",
+				"Explain the responsibilities and collaborators of "+sec+" as found in the codebase."),
 			ContentPath: sec + "/" + safeSegment(overview) + ".md",
 			Level:       "Intermediate",
 		})
 
-		// Capability pages: match stems against cap keywords; also group by stem prefix.
-		capHits := map[string]int{} // title → hit count
-		for _, fb := range files {
-			stemL := strings.ToLower(fb.stem)
-			// strip technical suffixes before matching
-			clean := regexp.MustCompile(`(?i)(controller|control|comp|serviceimpl|service|dao|mapper|model|entity|po|dto|vo|impl)$`).ReplaceAllString(stemL, "")
-			for key, title := range d.caps {
-				if strings.Contains(clean, key) || strings.Contains(stemL, key) {
-					if !zh {
-						title = humanize(key) + " Capability"
-					}
-					capHits[title]++
-				}
+		// Child pages from dominant stems under this segment.
+		// Child limit scales with cluster size: 3 + size/6, clamped to [3, 8].
+		childLimit := 3 + len(files)/6
+		if childLimit < 3 {
+			childLimit = 3
+		}
+		if childLimit > 8 {
+			childLimit = 8
+		}
+		stems := dominantStemsFrom(files, childLimit)
+		for _, st := range stems {
+			title := humanize(st)
+			if zh {
+				title = composeChineseTitle(st, "capability")
 			}
-		}
-		// Rank capabilities by hits
-		type ch struct {
-			title string
-			n     int
-		}
-		var caps []ch
-		for t, n := range capHits {
-			if n >= 1 {
-				caps = append(caps, ch{t, n})
-			}
-		}
-		sort.Slice(caps, func(i, j int) bool { return caps[i].n > caps[j].n })
-		if len(caps) > 6 {
-			caps = caps[:6]
-		}
-		for _, c := range caps {
-			if c.title == overview {
+			if title == overview || title == sec || isLowQuality(title) {
 				continue
 			}
-			safe := safeSegment(c.title)
+			// Avoid near-duplicate of section name
+			if strings.EqualFold(strings.TrimSpace(title), strings.TrimSpace(secCore)) {
+				continue
+			}
+			safe := safeSegment(title)
 			add(Planned{
-				Title: c.title, Section: sec, Group: sec, Parent: overview, Category: "business",
+				Title: title, Section: sec, Group: sec, Parent: overview, Category: "business",
 				Goal: goal(zh,
-					"说明「"+c.title+"」的业务规则、主要接口与数据对象，并给出调用与排查要点。",
-					"Explain "+c.title+" rules, APIs and data objects."),
+					"说明「"+title+"」在仓库中的实现落点、关键流程与依赖。",
+					"Explain how "+title+" is implemented and which code it touches."),
 				ContentPath: sec + "/" + safe + ".md",
 				Level:       "Advanced",
 			})
-		}
-
-		// If no cap matched, synthesise 1–2 pages from dominant class stems.
-		if len(caps) == 0 {
-			stems := dominantStemsFrom(files, 3)
-			for _, st := range stems {
-				title := composeChineseTitle(st, "capability")
-				if !zh {
-					title = humanize(st)
-				}
-				if title == overview || isLowQuality(title) {
-					continue
-				}
-				safe := safeSegment(title)
-				add(Planned{
-					Title: title, Section: sec, Group: sec, Parent: overview, Category: "business",
-					Goal:        goal(zh, "说明「"+title+"」相关业务能力。", "Explain "+title),
-					ContentPath: sec + "/" + safe + ".md",
-					Level:       "Advanced",
-				})
-			}
 		}
 	}
 	return out
@@ -745,8 +1491,7 @@ func buildBusinessDomains(model *scan.Model, zh bool) []Planned {
 func dominantStemsFrom(files []fileBag, limit int) []string {
 	counts := map[string]int{}
 	for _, f := range files {
-		// Group by leading camel tokens (CustBasicControl → CustBasic)
-		clean := regexp.MustCompile(`(?i)(Controller|Control|Comp|ServiceImpl|Service|Dao|Mapper|Model|Entity|Po|Dto|Vo|Impl)$`).ReplaceAllString(f.stem, "")
+		clean := regexp.MustCompile(`(?i)(Controller|Control|Comp|ServiceImpl|Service|Dao|Mapper|Model|Entity|Po|Dto|Vo|Impl|Handler|Resource|Action)$`).ReplaceAllString(f.stem, "")
 		if clean == "" || len(clean) < 3 {
 			continue
 		}
@@ -756,6 +1501,10 @@ func dominantStemsFrom(files []fileBag, limit int) []string {
 			key = parts[0] + parts[1]
 		} else if len(parts) == 1 {
 			key = parts[0]
+		}
+		// Drop pure technical noise keys
+		if match(strings.ToLower(key), `^(base|abstract|common|util|utils|config|constant|exception)$`) {
+			continue
 		}
 		counts[key]++
 	}
@@ -782,9 +1531,12 @@ func dominantStemsFrom(files []fileBag, limit int) []string {
 
 // buildInventory adds a small number of API/entity reference pages (hard budget).
 // Prefer aggregated themes over one-page-per-class.
-func buildInventory(model *scan.Model, zh bool, budget int) []Planned {
+func buildInventory(model *scan.Model, zh bool, budget int, vd *evidence.VendorDetector) []Planned {
 	if model == nil || budget <= 0 {
 		return nil
+	}
+	if vd == nil {
+		vd = evidence.NewVendorDetector(model, nil)
 	}
 	tax := chooseTaxonomy(model, zh)
 	var out []Planned
@@ -806,15 +1558,11 @@ func buildInventory(model *scan.Model, zh bool, budget int) []Planned {
 		if !(scan.IsAPISourceFile(f.RelativePath) || match(f.RelativePath, `(Action|Controller|Resource|Handler)\.`)) {
 			continue
 		}
-		if scan.IsNoisePath(f.RelativePath) {
+		if scan.IsNoisePath(f.RelativePath) || vd.IsVendor(f.RelativePath) {
 			continue
 		}
 		seg := packageDomain(f.RelativePath)
 		if seg == "" {
-			continue
-		}
-		// Skip domains already covered as business sections (avoid duplicate noise).
-		if domainCovered(seg) {
 			continue
 		}
 		segAPI[seg] = append(segAPI[seg], f)
@@ -860,7 +1608,7 @@ func buildInventory(model *scan.Model, zh bool, budget int) []Planned {
 		if !match(f.RelativePath, `entity|domain|model|dto|vo|po/`) && !match(f.RelativePath, `/po/|/entity/|/model/`) {
 			continue
 		}
-		if !scan.IsCodeFile(f.RelativePath) || scan.IsNoisePath(f.RelativePath) {
+		if !scan.IsCodeFile(f.RelativePath) || scan.IsNoisePath(f.RelativePath) || vd.IsVendor(f.RelativePath) {
 			continue
 		}
 		stem := strings.TrimSuffix(filepath.Base(f.RelativePath), filepath.Ext(f.RelativePath))
@@ -868,7 +1616,7 @@ func buildInventory(model *scan.Model, zh bool, budget int) []Planned {
 			continue
 		}
 		seg := packageDomain(f.RelativePath)
-		if seg == "" || domainCovered(seg) {
+		if seg == "" {
 			continue
 		}
 		segEnt[seg] = append(segEnt[seg], f)
@@ -928,18 +1676,6 @@ func packageDomain(rel string) string {
 	return base
 }
 
-func domainCovered(seg string) bool {
-	sl := strings.ToLower(seg)
-	for _, d := range knownDomains {
-		for _, k := range d.keys {
-			if sl == k || strings.HasPrefix(sl, k) || strings.Contains(sl, k) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func mergeUnique(a, b []Planned) []Planned {
 	seen := map[string]bool{}
 	var out []Planned
@@ -956,13 +1692,22 @@ func mergeUnique(a, b []Planned) []Planned {
 }
 
 // DescriptionSlug returns kebab-case English slug for metadata description.
+// Pure-CJK titles fall back to a readable role prefix + short hash (not opaque topic-only).
 func DescriptionSlug(title string) string {
 	if s, ok := titleSlugs[title]; ok {
 		return s
 	}
-	// Strip common Chinese suffixes to help ascii fallback
+	// Strip common Chinese role suffixes to help ascii fallback
 	t := title
-	for _, pair := range [][2]string{{"模块", "-module"}, {"服务", "-service"}, {"接口", "-api"}, {"设计", "-design"}, {"文档", "-docs"}, {"管理", "-mgmt"}} {
+	for _, pair := range [][2]string{
+		{"模块", "-module"}, {"服务", "-service"}, {"接口", "-api"},
+		{"设计", "-design"}, {"文档", "-docs"}, {"管理", "-mgmt"},
+		{"能力", "-capability"}, {"流程", "-flow"}, {"架构", "-arch"},
+		{"配置", "-config"}, {"部署", "-deploy"}, {"运维", "-ops"},
+		{"安全", "-security"}, {"测试", "-test"}, {"数据", "-data"},
+		{"模型", "-model"}, {"总览", "-overview"}, {"概述", "-overview"},
+		{"指南", "-guide"}, {"策略", "-strategy"}, {"规范", "-spec"},
+	} {
 		t = strings.ReplaceAll(t, pair[0], pair[1])
 	}
 	var b strings.Builder
@@ -975,10 +1720,49 @@ func DescriptionSlug(title string) string {
 	}
 	s := regexp.MustCompile(`-+`).ReplaceAllString(b.String(), "-")
 	s = strings.Trim(s, "-")
-	if s != "" {
+	// Accept ascii slug only when it has enough identity (not just a bare role suffix).
+	if s != "" && hasASCIILetter(s) && !isBareRoleSlug(s) {
 		return s
 	}
-	// hash fallback
+	// Readable hybrid: engineering role prefix + short hash (stable, no product lexicon).
+	return slugRolePrefix(title) + "-" + strings.ToLower(itohex(stableHash(title)))
+}
+
+func hasASCIILetter(s string) bool {
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			return true
+		}
+	}
+	return false
+}
+
+// isBareRoleSlug is true when ascii residue is only generic role token(s)
+// (e.g. "mgmt", "api", "mgmt-capability", "model-model-mgmt") from CJK suffix strip.
+func isBareRoleSlug(s string) bool {
+	role := map[string]bool{
+		"mgmt": true, "api": true, "module": true, "service": true, "design": true,
+		"docs": true, "capability": true, "flow": true, "arch": true, "config": true,
+		"deploy": true, "ops": true, "security": true, "test": true, "data": true,
+		"model": true, "overview": true, "guide": true, "strategy": true, "spec": true,
+		"svc": true, "mod": true, "cfg": true, "sec": true, "page": true,
+	}
+	parts := strings.Split(s, "-")
+	if len(parts) == 0 {
+		return true
+	}
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if !role[p] {
+			return false
+		}
+	}
+	return true
+}
+
+func stableHash(title string) int {
 	h := 0
 	for _, r := range title {
 		h = h*31 + int(r)
@@ -986,34 +1770,70 @@ func DescriptionSlug(title string) string {
 	if h < 0 {
 		h = -h
 	}
-	return "topic-" + strings.ToLower(itohex(h))
+	return h
+}
+
+// slugRolePrefix picks a short English role label from generic title cues only.
+func slugRolePrefix(title string) string {
+	switch {
+	case strings.Contains(title, "架构"):
+		return "arch"
+	case strings.Contains(title, "接口") || strings.Contains(title, "API"):
+		return "api"
+	case strings.Contains(title, "数据") || strings.Contains(title, "模型") || strings.Contains(title, "实体"):
+		return "data"
+	case strings.Contains(title, "部署") || strings.Contains(title, "运维"):
+		return "ops"
+	case strings.Contains(title, "安全") || strings.Contains(title, "权限") || strings.Contains(title, "认证"):
+		return "sec"
+	case strings.Contains(title, "配置"):
+		return "cfg"
+	case strings.Contains(title, "测试"):
+		return "test"
+	case strings.Contains(title, "故障") || strings.Contains(title, "排查"):
+		return "troubleshoot"
+	case strings.Contains(title, "流程") || strings.Contains(title, "工作流"):
+		return "flow"
+	case strings.Contains(title, "服务"):
+		return "svc"
+	case strings.Contains(title, "模块"):
+		return "mod"
+	case strings.Contains(title, "管理"):
+		return "mgmt"
+	case strings.Contains(title, "指南") || strings.Contains(title, "概述") || strings.Contains(title, "总览"):
+		return "guide"
+	default:
+		return "page"
+	}
 }
 
 var titleSlugs = map[string]string{
 	"项目概述": "project-overview", "快速开始": "getting-started",
 	"系统架构设计": "system-architecture", "整体架构设计": "overall-architecture",
 	"模块划分原则": "module-boundaries", "数据流架构": "data-flow-architecture",
+	"组件交互关系": "component-interactions", "部署架构": "deployment-architecture",
 	"核心模块详解": "core-modules", "开发指南": "developer-guide",
 	"目录结构": "directory-structure", "技术栈与依赖": "tech-stack-and-dependencies",
 	"API接口文档": "api-documentation", "配置管理": "configuration-management",
-	"安全设计": "security-design", "部署与运维": "deployment-and-operations",
+	"安全与访问控制": "security-and-access-control",
+	"部署与运维": "deployment-and-operations",
 	"故障排查": "troubleshooting", "数据模型设计": "data-model-design",
 	"数据库设计": "database-design", "接口文档": "api-docs", "架构设计": "architecture-design",
-	"核心业务模块": "core-business-modules", "接口设计原则": "api-design-principles",
-	"客户管理模块": "customer-management", "客户基本信息管理": "customer-basic-info",
-	"客户实体与导入功能": "customer-entity-import", "客户财务数据管理": "customer-finance",
-	"客户跟进与限额管理": "customer-follow-limit", "客户合同与担保管理": "customer-contract",
-	"指标监控模块": "indicator-monitoring", "KRI与指标监控": "kri-monitoring",
-	"内部审计模块": "internal-audit", "内部控制模块": "internal-control",
-	"ICE模型概述": "ice-model-overview", "知识管理模块": "knowledge-management",
-	"风险评估模块": "risk-assessment", "工作流管理": "workflow-management",
-	"安全架构设计": "security-architecture", "运营支持模块": "operations-support",
+	"核心业务模块": "core-business-modules", "测试与质量": "testing-and-quality",
+	"性能与扩展": "performance-and-scalability",
+	"常见问题": "faq", "附录": "appendix",
+	"编码规范": "coding-standards", "典型开发任务": "typical-development-tasks",
 	"Project Overview": "project-overview",
 	"Getting Started":  "getting-started", "System Architecture": "system-architecture",
 	"Core Modules": "core-modules", "API Documentation": "api-documentation",
 	"Data Model Design": "data-model-design", "Deployment and Operations": "deployment-and-operations",
 	"Troubleshooting": "troubleshooting", "Security Design": "security-design",
-	"Developer Guide": "developer-guide",
+	"Developer Guide": "developer-guide", "Testing and quality": "testing-and-quality",
+	"Security and access control": "security-and-access-control",
+	"Configuration": "configuration", "FAQ": "faq", "Appendix": "appendix",
+	"Performance and scalability": "performance-and-scalability",
+	"Coding standards": "coding-standards",
+	"Typical development tasks": "typical-development-tasks",
 }
 
 func composeChineseTitle(stem, kind string) string {
@@ -1023,8 +1843,8 @@ func composeChineseTitle(stem, kind string) string {
 		"service": true, "svc": true, "controller": true, "control": true, "comp": true,
 		"handler": true, "resource": true, "action": true, "impl": true, "util": true,
 		"helper": true, "manager": true, "common": true, "base": true, "abstract": true,
-		"sample": true, "test": true, "ncb": true, "api": true, "web": true, "rest": true,
-		"g": true, "dao": true, "mapper": true, "sunyard": true, "com": true,
+		"sample": true, "test": true, "api": true, "web": true, "rest": true,
+		"g": true, "dao": true, "mapper": true, "com": true, "org": true,
 	}
 	var filtered []string
 	for _, t := range tokens {
@@ -1035,78 +1855,14 @@ func composeChineseTitle(stem, kind string) string {
 		filtered = append(filtered, tl)
 	}
 	if len(filtered) == 0 {
-		filtered = tokens
-	}
-	phrases := []struct {
-		match []string
-		title string
-	}{
-		{[]string{"cash", "pool"}, "现金池"},
-		{[]string{"vir", "acc"}, "虚拟账户"},
-		{[]string{"virtual", "account"}, "虚拟账户"},
-		{[]string{"credit", "apply"}, "信用申请"},
-		{[]string{"loan", "apply"}, "贷款申请"},
-		{[]string{"loan", "detail"}, "贷款明细"},
-		{[]string{"disb", "detail"}, "放款明细"},
-		{[]string{"repay", "plan"}, "还款计划"},
-		{[]string{"repay", "detail"}, "还款明细"},
-		{[]string{"black", "list"}, "黑名单"},
-		{[]string{"data", "source"}, "数据源"},
-		{[]string{"work", "flow"}, "工作流"},
-		{[]string{"cust", "info"}, "客户信息"},
-		{[]string{"cust", "basic"}, "客户基本信息"},
-		{[]string{"cust", "entity"}, "客户实体"},
-		{[]string{"cust", "follow"}, "客户跟进"},
-		{[]string{"customer", "info"}, "客户信息"},
-		{[]string{"kri", "element"}, "KRI要素"},
-		{[]string{"kri", "quota"}, "KRI指标"},
-		{[]string{"audit", "factor"}, "审计因子"},
-		{[]string{"ice", "base"}, "ICE基础"},
-	}
-	for _, ph := range phrases {
-		ok := true
-		for _, m := range ph.match {
-			found := false
-			for _, t := range filtered {
-				if strings.Contains(t, m) || strings.Contains(m, t) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			return finalizeTitle(ph.title, kind)
+		for _, t := range tokens {
+			filtered = append(filtered, strings.ToLower(t))
 		}
 	}
-	dict := map[string]string{
-		"pay": "支付", "payment": "支付", "credit": "信贷", "loan": "贷款", "disb": "放款",
-		"repay": "还款", "bill": "票据", "risk": "风控", "cust": "客户", "customer": "客户",
-		"contract": "合同", "settle": "结算", "auth": "认证", "login": "登录", "user": "用户",
-		"order": "订单", "account": "账户", "cash": "现金", "pool": "池", "esb": "ESB",
-		"batch": "批处理", "schedule": "调度", "config": "配置", "security": "安全",
-		"api": "接口", "service": "服务", "module": "模块", "channel": "渠道",
-		"kri": "KRI", "ice": "ICE", "audit": "审计", "know": "知识", "knowledge": "知识",
-		"quota": "指标", "element": "要素", "factor": "因子", "workflow": "工作流",
-		"basic": "基础", "entity": "实体", "follow": "跟进", "fin": "财务",
-		"import": "导入", "export": "导出", "iir": "内部审计", "grc": "GRC",
-	}
-	var parts []string
-	for _, t := range filtered {
-		if zh, ok := dict[t]; ok {
-			parts = append(parts, zh)
-		} else if isAscii(t) {
-			parts = append(parts, humanize(t))
-		} else {
-			parts = append(parts, t)
-		}
-	}
-	core := strings.Join(parts, "")
+	// Generic composition only: join humanized tokens + kind suffix. No product lexicon.
+	core := humanize(strings.Join(filtered, " "))
 	if core == "" {
-		core = stem
+		core = humanize(stem)
 	}
 	return finalizeTitle(core, kind)
 }

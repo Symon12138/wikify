@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/symon/wikify/internal/models"
+	"github.com/JSHurt/wikify/internal/models"
 )
 
 // MergePlannerFields copies Goal/Parent/ContentPath/DescriptionSlug/Group from the

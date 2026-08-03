@@ -3,7 +3,7 @@ package planner
 import (
 	"testing"
 
-	"github.com/symon/wikify/internal/models"
+	"github.com/JSHurt/wikify/internal/models"
 )
 
 func TestMergePlannerFieldsExact(t *testing.T) {

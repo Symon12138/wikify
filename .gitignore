@@ -1,0 +1,76 @@
+# Binaries
+*.exe
+*.exe~
+wikify
+wikify.exe
+
+# Output
+dist/
+.wikify/
+
+# Environment / secrets
+.env
+.env.*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Internal development scripts (audits, patches, temp files)
+scripts/_*
+
+# Development debris (local-only audit/analysis files)
+.wiki_audit*.py
+.wiki_audit*.json
+.wiki_audit_summary.txt
+.wiki_audit_tmp.json
+.compare-*.md
+.wikify-plans-*.md
+.tmp/
+
+# Local AI agent tooling (machine-specific configs)
+.claude/
+.comet/
+openspec/
+skills-lock.json
+
+# Multi-agent / IDE skill mirrors
+.agent/
+.agents/
+.amazonq/
+.augment/
+.bob/
+.cline/
+.clinerules/
+.codebuddy/
+.codex/
+.continue/
+.cospec/
+.crush/
+.cursor/
+.factory/
+.forge/
+.gemini/
+.iflow/
+.junie/
+.kilocode/
+.kimi/
+.kimi-code/
+.kiro/
+.lingma/
+.mimocode/
+.opencode/
+.pi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.trae-cn/
+.windsurf/
+.zcode/
+
+# OS
+.DS_Store
+Thumbs.db
