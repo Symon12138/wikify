@@ -4,11 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-if [[ -d "/c/Users/Administrator/scoop/apps/go/current" ]]; then
-  export GOROOT="/c/Users/Administrator/scoop/apps/go/current"
-  export PATH="$GOROOT/bin:$PATH"
-fi
-
 FIX="${1:-}"
 CLEANUP=0
 if [[ -z "$FIX" ]]; then

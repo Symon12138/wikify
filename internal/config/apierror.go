@@ -122,7 +122,7 @@ func ClassifyError(err error) (ErrorKind, string) {
 }
 
 // isModelNotFoundBody 判断一个 HTTP 404 的响应体是否表示"模型名不存在",
-// 而非"接口路径不存在"。OpenAI 兼容网关(otokapi、one-api 等)在模型名
+// 而非"接口路径不存在"。OpenAI 兼容网关(one-api、new-api 等)在模型名
 // 拼写错误或未开通时会返回 404,响应体形如:
 //
 //	{"error":{"message":"model 'gpt-x' not found","type":"invalid_request_error","code":"model_not_found"}}

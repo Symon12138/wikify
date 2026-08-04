@@ -1,7 +1,6 @@
 # Real LLM generate on the sample fixture. Run in PowerShell.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-if (-not $Root) { $Root = "E:\Project\AI\openread" }
 Set-Location $Root
 
 $Fix = if ($args[0]) { $args[0] } else { Join-Path $Root "testdata\e2e-sample" }
@@ -10,9 +9,7 @@ $Bin = Join-Path $Root "wikify.exe"
 
 if (-not (Test-Path $Bin)) {
   Write-Host "building wikify.exe ..."
-  $env:GOROOT = "C:\Users\Administrator\scoop\apps\go\current"
-  $env:PATH = "$env:GOROOT\bin;$env:PATH"
-  go build -ldflags "-s -w -X main.appVersion=0.1.0" -o wikify.exe .
+  go build -ldflags "-s -w -X main.appVersion=dev" -o wikify.exe .
 }
 
 Write-Host "binary: $Bin"

@@ -4,17 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-if [[ -d "/c/Users/Administrator/scoop/apps/go/current" ]]; then
-  export GOROOT="/c/Users/Administrator/scoop/apps/go/current"
-  export PATH="$GOROOT/bin:$PATH"
-fi
-
 FIX="${1:-$ROOT/testdata/e2e-sample}"
 LOG="${2:-$ROOT/testdata/e2e-generate.log}"
 
 if [[ ! -x "$ROOT/wikify.exe" && ! -x "$ROOT/wikify" ]]; then
   echo "building wikify..."
-  go build -ldflags "-s -w -X main.appVersion=0.1.0" -o wikify.exe .
+  go build -ldflags "-s -w -X main.appVersion=dev" -o wikify.exe .
 fi
 BIN="$ROOT/wikify.exe"
 [[ -x "$BIN" ]] || BIN="$ROOT/wikify"

@@ -17,7 +17,9 @@ import (
 	"github.com/Symon12138/wikify/internal/runner"
 )
 
-var appVersion = "0.1.0"
+// appVersion is overridden at release time via -ldflags "-X main.appVersion=...".
+// Source/dev builds report "dev".
+var appVersion = "dev"
 
 func main() {
 	root := &cobra.Command{

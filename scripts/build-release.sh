@@ -9,11 +9,6 @@ cd "$ROOT"
 
 VERSION="${VERSION:-0.1.0}"
 
-if [[ -d "/c/Users/Administrator/scoop/apps/go/current" ]]; then
-  export GOROOT="/c/Users/Administrator/scoop/apps/go/current"
-  export PATH="$GOROOT/bin:$PATH"
-fi
-
 LDFLAGS="-s -w -X main.appVersion=${VERSION}"
 
 echo "→ tests"
