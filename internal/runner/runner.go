@@ -66,6 +66,10 @@ type Config struct {
 	GraphFile string
 }
 
+// pageLimiter 自适应限流器：命中限流时自动退避，成功后逐步回落。
+// 进程级单例，跨所有并发 Page 共享，避免大仓批量 429。
+var pageLimiter = newAdaptiveLimiter()
+
 // draftsDir returns the path to the in-progress drafts directory.
 func draftsDir(workDir string) string {
 	return filepath.Join(workDir, ".wikify", "drafts")
@@ -567,6 +571,14 @@ func tuiRun(client *openai.Client, cfg Config, action, outPath string) error {
 						checkAllDone()
 					}()
 
+					if err := pageLimiter.Wait(ctx); err != nil {
+						prog.Send(tui.PageFailedMsg{Slug: s, Err: "rate limit wait canceled: " + err.Error()})
+						failedMu.Lock()
+						failedSet[s] = true
+						failedMu.Unlock()
+						return
+					}
+
 					prog.Send(tui.PageStartMsg{Slug: s})
 					p := pageBySlug[s]
 					onStatus := func(status string) {
@@ -575,12 +587,16 @@ func tuiRun(client *openai.Client, cfg Config, action, outPath string) error {
 					content, err := agent.RunPage(ctx, client, cfg.Model, cfg.WorkDir, cfg.Language,
 						&p, wiki, false, nil, onStatus, repoModel)
 					if err != nil {
+						if isRateLimitError(err) {
+							pageLimiter.OnThrottle()
+						}
 						failedMu.Lock()
 						failedSet[s] = true
 						failedMu.Unlock()
 						prog.Send(tui.PageFailedMsg{Slug: s, Err: err.Error()})
 						return
 					}
+					pageLimiter.OnSuccess()
 					if !isSubstantialBody(content) {
 						failedMu.Lock()
 						failedSet[s] = true
@@ -657,6 +673,15 @@ func runPagesTracked(ctx context.Context, client *openai.Client, cfg Config, pag
 			defer wg.Done()
 			defer func() { <-sem }()
 
+			// 自适应限流：命中限流时自动退避
+			if err := pageLimiter.Wait(ctx); err != nil {
+				prog.Send(tui.PageFailedMsg{Slug: p.Slug, Err: "rate limit wait canceled: " + err.Error()})
+				failedMu.Lock()
+				(*failedSet)[p.Slug] = true
+				failedMu.Unlock()
+				return
+			}
+
 			prog.Send(tui.PageStartMsg{Slug: p.Slug})
 			onStatus := func(status string) {
 				prog.Send(tui.PageStatusMsg{Slug: p.Slug, Status: status})
@@ -675,8 +700,12 @@ func runPagesTracked(ctx context.Context, client *openai.Client, cfg Config, pag
 					&p, wiki, false, nil, onStatus, repoModel)
 				if err != nil {
 					lastErr = err
+					if isRateLimitError(err) {
+						pageLimiter.OnThrottle()
+					}
 					continue
 				}
+				pageLimiter.OnSuccess()
 				if !isSubstantialBody(content) {
 					lastErr = fmt.Errorf("page body too thin for %q (%d runes)", p.Title, len([]rune(content)))
 					continue
@@ -840,6 +869,10 @@ func runParallelPlain(ctx context.Context, client *openai.Client, cfg Config, pa
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			if err := pageLimiter.Wait(ctx); err != nil {
+				atomic.AddInt64(&failed, 1)
+				return
+			}
 			if !generateWithRetryPlain(ctx, client, cfg, wiki, &p, outPath, onToolCall, repoModel) {
 				atomic.AddInt64(&failed, 1)
 				return
@@ -867,6 +900,9 @@ func generateWithRetryPlain(ctx context.Context, client *openai.Client, cfg Conf
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		content, err := agent.RunPage(ctx, client, cfg.Model, cfg.WorkDir, cfg.Language, page, wiki, cfg.VerbosePages, onToolCall, nil, repoModel)
 		if err != nil {
+			if isRateLimitError(err) {
+				pageLimiter.OnThrottle()
+			}
 			if attempt < maxAttempts {
 				fmt.Printf("  \033[33m⚠ auto-retry %d/%d: %v\033[0m\n", attempt, cfg.MaxRetries, err)
 				time.Sleep(pageRetryDelay(attempt, err))
@@ -922,6 +958,7 @@ func generateWithRetryPlain(ctx context.Context, client *openai.Client, cfg Conf
 			fmt.Printf("  \033[2msoft-verify: %s\033[0m\n", strings.Join(issues, "; "))
 		}
 		fmt.Printf("  \033[32m✓\033[0m %s.md\n", page.Slug)
+		pageLimiter.OnSuccess()
 		return true
 	}
 	return false
