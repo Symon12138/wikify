@@ -528,6 +528,17 @@ func tuiRun(client *openai.Client, cfg Config, action, outPath string) error {
 			return
 		}
 
+		// 失败汇总（P2）：让用户一眼看清哪些页失败
+		failedMu.Lock()
+		tmpFailed := make(map[string]bool, len(failedSet))
+		for k, v := range failedSet {
+			tmpFailed[k] = v
+		}
+		failedMu.Unlock()
+		if len(tmpFailed) > 0 {
+			printFailureSummary(tmpFailed, wiki)
+		}
+
 		// -y / --skip-failed: do not block on interactive retry; publish what we have
 		// (missing drafts become honest thin stubs in Export). Completes one generate
 		// without hanging the TUI when some pages fail after retries.
@@ -689,6 +700,8 @@ func runPagesTracked(ctx context.Context, client *openai.Client, cfg Config, pag
 
 			maxAttempts := cfg.MaxRetries + 1
 			var lastErr error
+			var consecSame int
+			var prevErrStr string
 			for attempt := 1; attempt <= maxAttempts; attempt++ {
 				if attempt > 1 {
 					prog.Send(tui.PageRetryingMsg{Slug: p.Slug})
@@ -702,6 +715,16 @@ func runPagesTracked(ctx context.Context, client *openai.Client, cfg Config, pag
 					lastErr = err
 					if isRateLimitError(err) {
 						pageLimiter.OnThrottle()
+					}
+					es := err.Error()
+					if es == prevErrStr && isPermanentForEarlyStop(err) {
+						consecSame++
+					} else {
+						consecSame = 1
+						prevErrStr = es
+					}
+					if earlyStopPermanent(consecSame, err) {
+						break
 					}
 					continue
 				}
@@ -815,6 +838,10 @@ func plainRun(client *openai.Client, cfg Config, action, outPath string) error {
 
 	done := countDonePages(outPath, wiki)
 	missing := len(wiki.Pages) - done
+	// P2 失败汇总（plain 模式）
+	if failed > 0 {
+		fmt.Printf("\n\033[33m━━ 失败页 %d — 建议: 检查 API Key/网络后用 --only-stubs 重试失败页 \033[0m\n", failed)
+	}
 	if missing > 0 && !cfg.SkipFailed && !cfg.AutoYes {
 		fmt.Printf("\n\033[33m⚠ %d page(s) missing or failed — not publishing (use --skip-failed or -y to publish partial, or resume later)\033[0m\n", missing)
 		fmt.Printf("  Drafts kept at: \033[36m%s\033[0m\n", outPath)
@@ -897,11 +924,30 @@ func runParallelPlain(ctx context.Context, client *openai.Client, cfg Config, pa
 // generateWithRetryPlain returns true on success.
 func generateWithRetryPlain(ctx context.Context, client *openai.Client, cfg Config, wiki *models.Wiki, page *models.WikiPage, outPath string, onToolCall func(string, string, string), repoModel *scan.Model) bool {
 	maxAttempts := cfg.MaxRetries + 1
+	var consecSame int
+	var prevErrStr string
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		content, err := agent.RunPage(ctx, client, cfg.Model, cfg.WorkDir, cfg.Language, page, wiki, cfg.VerbosePages, onToolCall, nil, repoModel)
 		if err != nil {
 			if isRateLimitError(err) {
 				pageLimiter.OnThrottle()
+			}
+			// 同类永久错误连续 3 次早停
+			es := err.Error()
+			if es == prevErrStr && isPermanentForEarlyStop(err) {
+				consecSame++
+			} else {
+				consecSame = 1
+				prevErrStr = es
+			}
+			if earlyStopPermanent(consecSame, err) {
+				fmt.Printf("  \033[33m⚠ early-stop: same permanent error 3x for %s — %v\033[0m\n", page.Slug, err)
+				if cfg.SkipFailed {
+					fmt.Printf("  \033[33m⚠ skipped: %s (%v)\033[0m\n", page.Slug, err)
+				} else {
+					fmt.Printf("  \033[31m✗ failed: %v\033[0m\n", err)
+				}
+				return false
 			}
 			if attempt < maxAttempts {
 				fmt.Printf("  \033[33m⚠ auto-retry %d/%d: %v\033[0m\n", attempt, cfg.MaxRetries, err)
@@ -1130,6 +1176,43 @@ func newLLMHTTPClient() *http.Client {
 			ResponseHeaderTimeout: 3 * time.Minute, // wait for first byte / headers
 		},
 	}
+}
+
+// isPermanentForEarlyStop 判断是否为永久性错误（连续同错可早停）
+func isPermanentForEarlyStop(err error) bool {
+	if err == nil {
+		return false
+	}
+	// 瞬时错误可重试，不算永久失败
+	if agent.IsTransientAPIError(err) {
+		return false
+	}
+	return true
+}
+
+// earlyStopPermanent 同类永久错误连续 3 次则早停，避免无效重试。
+func earlyStopPermanent(consecutive int, err error) bool {
+	return consecutive >= 3 && isPermanentForEarlyStop(err)
+}
+
+// printFailureSummary 在生成结束时打印失败页分类汇总
+func printFailureSummary(failed map[string]bool, wiki *models.Wiki) {
+	if len(failed) == 0 {
+		return
+	}
+	titleOf := make(map[string]string, len(wiki.Pages))
+	for _, p := range wiki.Pages {
+		titleOf[p.Slug] = p.Title
+	}
+	fmt.Printf("\n\033[33m━━ 失败汇总 (%d 页) ━━\033[0m\n", len(failed))
+	for slug := range failed {
+		title := titleOf[slug]
+		if title == "" {
+			title = slug
+		}
+		fmt.Printf("  • %s (%s)\n", title, slug)
+	}
+	fmt.Printf("\033[2m提示: 可用 --only-stubs 重试失败页，或检查 API Key/网络后重跑\033[0m\n")
 }
 
 // pageRetryDelay spaces page-level retries so a storm of 524s does not
