@@ -89,7 +89,7 @@ func hasDraft(workDir string) bool {
 // Run executes the full documentation generation pipeline.
 func Run(cfg Config) error {
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key not configured, run: wikify config")
+		return fmt.Errorf("API key 未配置 — 首次使用请运行 `wikify config` 按向导完成配置 (API Key / Base URL / 模型)，或设置环境变量 WIKIFY_API_KEY")
 	}
 	// MaxPages <= 0 is resolved in buildCatalog once the repo has been scanned
 	// (planner.SuggestMaxPages scales the budget with repo size). Paths that
