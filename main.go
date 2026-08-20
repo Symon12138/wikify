@@ -31,6 +31,7 @@ func main() {
 	root.AddCommand(
 		newGenerateCmd(),
 		newPolishCmd(),
+		newExportCmd(),
 		newConfigCmd(),
 		newBrowseCmd(),
 		newVersionCmd(),
@@ -181,6 +182,55 @@ inject missing ## 目录, and refresh browse/metadata — without a full generat
 	cmd.Flags().StringVar(&dir, "dir", "", "Target directory that contains .wikify (default: cwd)")
 	cmd.Flags().StringVar(&exportLang, "export-lang", "", "Content language label zh|en (default from .wikify/lang)")
 	cmd.Flags().StringVar(&graphFile, "graph-file", "", "Optional external code-graph JSON (import edges overlay)")
+	return cmd
+}
+
+// ── export (multi-format) ─────────────────────────────────────────────────────
+
+func newExportCmd() *cobra.Command {
+	var (
+		dir    string
+		format string
+		out    string
+	)
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export .wikify to Docusaurus / MkDocs etc.",
+		Long: `Export the generated .wikify wiki to another documentation platform format.
+
+Pure file transformation — zero LLM cost. Reads .wikify/{meta/wiki.json,content/**}
+and writes to the target layout.
+
+Supported --format values: docusaurus, mkdocs
+
+Examples:
+  wikify export --format docusaurus
+  wikify export --format docusaurus --out ./site-docs
+  wikify export --format mkdocs --out ./mkdocs`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if format == "" {
+				return fmt.Errorf("--format is required: one of %s", "docusaurus, mkdocs")
+			}
+			targetDir := dir
+			if targetDir == "" {
+				targetDir, _ = os.Getwd()
+			}
+			absDir, _ := filepath.Abs(targetDir)
+			if err := export.ExportToFormat(absDir, format, out, export.ExportOptions{}); err != nil {
+				return err
+			}
+			if out == "" {
+				out = filepath.Join(absDir, ".wikify", "export", format)
+			}
+			fmt.Printf("✓ Exported [%s] \u2192 %s\n", format, out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", "", "Project directory that contains .wikify (default: cwd)")
+	cmd.Flags().StringVar(&format, "format", "", "Target format: docusaurus | mkdocs (required)")
+	cmd.Flags().StringVar(&out, "out", "", "Output directory (default: .wikify/export/<format>)")
+	_ = cmd.MarkFlagRequired("format")
 	return cmd
 }
 
