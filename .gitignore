@@ -74,3 +74,6 @@ skills-lock.json
 # OS
 .DS_Store
 Thumbs.db
+
+# 内部规划，不对外发布
+ROADMAP.md

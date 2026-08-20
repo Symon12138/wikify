@@ -8,7 +8,9 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"slices"
 	"strings"
+	"sync"
 
 	gitignore "github.com/sabhiram/go-gitignore"
 	openai "github.com/sashabaranov/go-openai"
@@ -80,6 +82,55 @@ func commandPolicyError(command string, windows bool) string {
 		return "Error: output redirection ('>') is blocked — command output is captured and returned automatically"
 	}
 	return ""
+}
+
+// fileContentCache memoizes whole-file reads across every ToolSet in the
+// process. Each Page/Catalog agent calls tools.New() separately (see
+// internal/agent/page.go), so a per-ToolSet cache would never hit across
+// pages — the same hot source files are re-read by every concurrent page.
+// Keying on abspath|mtime|size makes a stale entry impossible: any edit to
+// the file changes mtime or size and forces a re-read.
+var fileContentCache struct {
+	sync.RWMutex
+	m map[string][]byte
+}
+
+// cachedReadFile returns the full bytes of an already-stat'd regular file,
+// serving a memoized copy when the path+mtime+size match a prior read. The
+// FileInfo must come from the same stat used by the caller so the freshness
+// key is consistent. Returns a copy so callers can never mutate the cache.
+func cachedReadFile(abspath string, info os.FileInfo) ([]byte, error) {
+	key := fmt.Sprintf("%s|%d|%d", abspath, info.ModTime().UnixNano(), info.Size())
+
+	fileContentCache.RLock()
+	if fileContentCache.m != nil {
+		if data, ok := fileContentCache.m[key]; ok {
+			fileContentCache.RUnlock()
+			return slices.Clone(data), nil
+		}
+	}
+	fileContentCache.RUnlock()
+
+	data, err := os.ReadFile(abspath)
+	if err != nil {
+		return nil, err
+	}
+
+	fileContentCache.Lock()
+	if fileContentCache.m == nil {
+		fileContentCache.m = make(map[string][]byte)
+	}
+	// Drop older entries for the same path (different mtime/size) so an edited
+	// file does not leave its previous revision pinned in memory.
+	prefix := abspath + "|"
+	for k := range fileContentCache.m {
+		if strings.HasPrefix(k, prefix) && k != key {
+			delete(fileContentCache.m, k)
+		}
+	}
+	fileContentCache.m[key] = data
+	fileContentCache.Unlock()
+	return slices.Clone(data), nil
 }
 
 // ToolSet holds all tools bound to a specific repository root.
@@ -325,7 +376,11 @@ func (ts *ToolSet) viewFileInDetail(args map[string]any) string {
 		return "Error: file is too large (> 5 MB). Use line range parameters."
 	}
 
-	data, err := os.ReadFile(target)
+	// Cache the whole-file read (keyed on path+mtime+size): concurrent page
+	// agents re-open the same hot source files, and every returned byte is
+	// resent on subsequent agent turns, so avoiding redundant disk reads here
+	// is cheap and safe (stat freshness invalidates edits automatically).
+	data, err := cachedReadFile(target, info)
 	if err != nil {
 		return fmt.Sprintf("Error reading file: %v", err)
 	}

@@ -310,21 +310,53 @@ wikify generate --draft clear
 
 ---
 
+---
 ## 🌐 LLM 提供商兼容性
 
 wikify 使用 **OpenAI 兼容的 Chat Completions API**，支持任意兼容提供商：
 
-| 提供商 | base_url |
-|--------|----------|
-| DeepSeek（默认） | `https://api.deepseek.com/v1` |
-| OpenAI | `https://api.openai.com/v1` |
-| Ollama（本地） | `http://localhost:11434/v1` |
-| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{deploy}/` |
-| 自定义代理 | 你的接口地址 |
+### 快速配置示例
 
----
+```bash
+# 交互式（推荐）：↑/↓ 选字段，←/→ 切换枚举，Enter 输入，s 保存
+wikify config
+```
 
-## 🛠️ 参与开发
+# 配置示例
+配置存储于 `~/.wikify/config.yaml`，示例：
+
+```yaml
+language: zh           # 界面语言
+doc_language: zh       # 文档输出语言（zh / en）
+
+llm:
+  provider: custom
+  model: deepseek-chat
+  api_key: sk-xxxxxxxxxxxxxxxx
+  base_url: https://api.deepseek.com/v1  # 任意 OpenAI 兼容接口
+
+concurrency:
+  max_concurrent: 3   # 并发页面生成数
+  max_retries: 2      # 单页失败后自动重试次数
+```
+
+通过命令行管理：
+```bash
+wikify config                           # 交互式编辑（TTY）/ 非 TTY 时打印当前配置
+wikify config --api-key sk-xxx          # 设置 API Key
+wikify config --base-url https://...    # 自定义接口地址
+wikify config --model deepseek-chat     # 设置模型
+wikify config --workers 5               # 设置并发数
+wikify config --retries 2               # 设置重试次数
+wikify config --lang en                 # 切换语言
+```
+
+### 环境变量覆盖
+```bash
+WIKIFY_API_KEY=sk-xxx         wikify generate
+WIKIFY_BASE_URL=https://...   wikify generate
+WIKIFY_MODEL=gpt-4o           wikify generate
+```
 
 **环境要求：** Go 1.21+
 

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeTempFile(t *testing.T, dir, name, body string) string {
@@ -151,5 +152,140 @@ func TestCommandPolicyKeepsWriteTokenBlocks(t *testing.T) {
 		if got := commandPolicyError(cmd, true); got == "" {
 			t.Errorf("expected destructive command %q to stay blocked", cmd)
 		}
+	}
+}
+
+// resetFileCache clears the process-wide file cache so tests don't leak
+// entries into one another.
+func resetFileCache() {
+	fileContentCache.Lock()
+	fileContentCache.m = nil
+	fileContentCache.Unlock()
+}
+
+// cacheSize reports the number of cached entries under lock.
+func cacheSize() int {
+	fileContentCache.RLock()
+	defer fileContentCache.RUnlock()
+	return len(fileContentCache.m)
+}
+
+func TestCachedReadFileHitsOnSecondRead(t *testing.T) {
+	resetFileCache()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "hot.txt")
+	if err := os.WriteFile(p, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := cachedReadFile(p, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != "alpha\nbeta\n" {
+		t.Fatalf("unexpected content: %q", first)
+	}
+	if cacheSize() != 1 {
+		t.Fatalf("expected 1 cache entry after first read, got %d", cacheSize())
+	}
+
+	// Mutate the file on disk WITHOUT changing mtime/size, then re-read with
+	// the original FileInfo: the cache must serve the memoized bytes, proving
+	// the second call did not touch disk.
+	if err := os.WriteFile(p, []byte("XXXXX\nYYYYY\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := cachedReadFile(p, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(second) != "alpha\nbeta\n" {
+		t.Fatalf("cache miss: expected memoized bytes, got %q", second)
+	}
+	if cacheSize() != 1 {
+		t.Fatalf("expected cache to stay at 1 entry, got %d", cacheSize())
+	}
+}
+
+func TestCachedReadFileInvalidatesOnChange(t *testing.T) {
+	resetFileCache()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "mut.txt")
+	if err := os.WriteFile(p, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	info1, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cachedReadFile(p, info1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rewrite with different content+size and bump mtime forward so the key
+	// changes regardless of filesystem mtime resolution.
+	if err := os.WriteFile(p, []byte("version-two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newTime := info1.ModTime().Add(2 * time.Second)
+	if err := os.Chtimes(p, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+	info2, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := cachedReadFile(p, info2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "version-two\n" {
+		t.Fatalf("stale cache: expected fresh content, got %q", got)
+	}
+	// Old revision must be evicted, not left pinned alongside the new one.
+	if cacheSize() != 1 {
+		t.Fatalf("expected stale entry evicted (1 entry), got %d", cacheSize())
+	}
+}
+
+// TestViewFileInDetailReflectsEditsAfterMtimeBump exercises the cache through
+// the public tool handler: an edited file must surface new content.
+func TestViewFileInDetailReflectsEditsAfterMtimeBump(t *testing.T) {
+	resetFileCache()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(p, []byte("old-line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts := New(dir)
+
+	out1 := ts.viewFileInDetail(map[string]any{"file_path": "doc.txt"})
+	if !strings.Contains(out1, "old-line") {
+		t.Fatalf("expected initial content, got %q", out1)
+	}
+
+	if err := os.WriteFile(p, []byte("new-content-here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(3 * time.Second)
+	if err := os.Chtimes(p, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	out2 := ts.viewFileInDetail(map[string]any{"file_path": "doc.txt"})
+	if !strings.Contains(out2, "new-content-here") {
+		t.Fatalf("expected edited content after mtime bump, got %q", out2)
+	}
+	if strings.Contains(out2, "old-line") {
+		t.Fatalf("stale content leaked through tool handler: %q", out2)
 	}
 }
