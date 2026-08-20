@@ -131,9 +131,14 @@ func probeChat(ctx context.Context, cfg LLMConfig) (endpoint, reply string, err 
 	}
 
 	payload := chatProbeRequest{
-		Model:     cfg.Model,
-		Messages:  []chatProbeMessage{{Role: "user", Content: "ping"}},
-		MaxTokens: 1,
+		Model:    cfg.Model,
+		Messages: []chatProbeMessage{{Role: "user", Content: "ping"}},
+	}
+	// 推理模型（xhigh/high）需要更多 token 完成思考，1 token 必定 400。
+	if cfg.ReasoningEffort != "" {
+		payload.MaxTokens = 50
+	} else {
+		payload.MaxTokens = 1
 	}
 	// 与 agent.go 的条件字段模式对齐:仅在显式设置时才带上。
 	if cfg.Temperature != nil {

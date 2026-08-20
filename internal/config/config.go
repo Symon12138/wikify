@@ -233,6 +233,17 @@ func NormalizeBaseURL(raw string) string {
 	if err != nil || u.Host == "" {
 		return base
 	}
+	// Strip trailing API action suffixes so the base stays at the /v1 root
+	// (e.g. https://opencode.ai/zen/go/v1/responses → https://opencode.ai/zen/go/v1).
+	// Both /v1/models and /v1/chat/completions are derived from this root.
+	for _, suf := range []string{"/responses", "/chat/completions", "/messages"} {
+		if strings.HasSuffix(base, suf) {
+			base = strings.TrimSuffix(base, suf)
+			base = strings.TrimRight(base, "/")
+			u, _ = url.Parse(base)
+			break
+		}
+	}
 	// Already OpenAI-style root.
 	if strings.HasSuffix(base, "/v1") || strings.Contains(u.Path, "/v1/") {
 		return base
