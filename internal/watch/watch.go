@@ -7,73 +7,148 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
-// Watch polls workDir for file changes (respects .gitignore via simple skips) and calls onChange.
-// It debounces rapid changes and respects context cancellation.
-func Watch(ctx context.Context, workDir string, interval time.Duration, onChange func(changed []string)) error {
-	if interval <= 0 {
-		interval = 2 * time.Second
+// skipDir reports whether a directory should not be watched.
+func skipDir(name string) bool {
+	switch name {
+	case ".git", "node_modules", ".wikify", "dist", ".tmp", "vendor":
+		return true
 	}
-	prev := collectMtimes(workDir)
-	// Debounce: collect changes within window before firing
-	var pending []string
-	var debounceTimer *time.Timer
-	busy := false // 生成期间不再重复触发，新变更由下次轮询自然捕获
-	flush := func() {
-		if busy {
-			return
+	return strings.HasPrefix(name, ".") && name != "."
+}
+
+// addRecursive adds root and all subdirectories to the watcher.
+func addRecursive(w *fsnotify.Watcher, root string) error {
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
-		if len(pending) > 0 {
-			changed := pending
-			pending = nil
-			busy = true
-			go func() {
-				defer func() { busy = false }()
-				onChange(changed)
-			}()
+		if !d.IsDir() {
+			return nil
 		}
+		if skipDir(d.Name()) && path != root {
+			return filepath.SkipDir
+		}
+		return w.Add(path)
+	})
+}
+
+// debouncer coalesces rapid events into a single batch.
+type debouncer struct {
+	pending map[string]bool
+	delay   time.Duration
+	timer   *time.Timer
+	onFlush func(changed []string)
+	busy    bool // onChange in flight; coalesce until it returns
+}
+
+func newDebouncer(delay time.Duration, onFlush func([]string)) *debouncer {
+	return &debouncer{pending: map[string]bool{}, delay: delay, onFlush: onFlush}
+}
+
+func (d *debouncer) rearm() {
+	if d.timer != nil {
+		d.timer.Stop()
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	d.timer = time.AfterFunc(d.delay, func() { d.flush() })
+}
+
+func (d *debouncer) add(path string) {
+	d.pending[path] = true
+	if d.timer != nil {
+		d.timer.Stop()
+	}
+	d.timer = time.AfterFunc(d.delay, d.flush)
+}
+
+func (d *debouncer) flush() {
+	if d.busy {
+		return // keep pending; retried via rearm after onChange returns
+	}
+	if len(d.pending) == 0 {
+		return
+	}
+	changed := make([]string, 0, len(d.pending))
+	for p := range d.pending {
+		changed = append(changed, p)
+	}
+	d.pending = map[string]bool{}
+	d.busy = true
+	go func() {
+		defer func() { d.busy = false }()
+		d.onFlush(changed)
+		if len(d.pending) > 0 {
+			d.rearm()
+		}
+	}()
+}
+
+// WatchFS watches workDir with fsnotify (event-driven, no polling) and calls
+// onChange with debounced changed paths. Falls back gracefully on ctx cancel.
+// New directories created at runtime are watched automatically.
+func WatchFS(ctx context.Context, workDir string, debounce time.Duration, onChange func(changed []string)) error {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("fsnotify watcher: %w", err)
+	}
+	defer w.Close()
+
+	if err := addRecursive(w, workDir); err != nil {
+		return fmt.Errorf("add recursive: %w", err)
+	}
+
+	if debounce <= 0 {
+		debounce = 800 * time.Millisecond
+	}
+	db := newDebouncer(debounce, onChange)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			cur := collectMtimes(workDir)
-			changed := diffMtimes(prev, cur)
-			if len(changed) > 0 {
-				prev = cur
-				pending = append(pending, changed...)
-				if debounceTimer != nil {
-					debounceTimer.Stop()
-				}
-				debounceTimer = time.AfterFunc(800*time.Millisecond, flush)
+		case ev, ok := <-w.Events:
+			if !ok {
+				return nil
 			}
+			// Watch newly created directories
+			if ev.Has(fsnotify.Create) {
+				if info, err := os.Stat(ev.Name); err == nil && info.IsDir() && !skipDir(filepath.Base(ev.Name)) {
+					_ = addRecursive(w, ev.Name)
+				}
+			}
+			if ev.Has(fsnotify.Write) || ev.Has(fsnotify.Create) || ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
+				db.add(ev.Name)
+			}
+		case err, ok := <-w.Errors:
+			if !ok {
+				return nil
+			}
+			// Non-fatal: skip unreadable paths, keep watching
+			_ = err
 		}
 	}
 }
 
+// Keep the old polling API available for reference/fallback.
 func collectMtimes(root string) map[string]time.Time {
 	m := map[string]time.Time{}
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil { return nil }
+		if err != nil {
+			return nil
+		}
 		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == ".wikify" || name == "dist" || name == ".tmp" || name == "vendor" {
+			if skipDir(d.Name()) && path != root {
 				return filepath.SkipDir
-			}
-			if strings.HasPrefix(name, ".") && name != "." {
-				// Skip hidden dirs (like .claude, .comet) but not the root itself
-				if path != root {
-					return filepath.SkipDir
-				}
 			}
 			return nil
 		}
 		info, err := d.Info()
-		if err != nil { return nil }
+		if err != nil {
+			return nil
+		}
 		m[path] = info.ModTime()
 		return nil
 	})
@@ -87,12 +162,13 @@ func diffMtimes(prev, cur map[string]time.Time) []string {
 			changed = append(changed, path)
 		}
 	}
-	// Also detect deletions (not needed for trigger, but for completeness)
 	return changed
 }
 
 func FormatChanged(changed []string, workDir string) string {
-	if len(changed) == 0 { return "" }
+	if len(changed) == 0 {
+		return ""
+	}
 	if len(changed) == 1 {
 		rel, _ := filepath.Rel(workDir, changed[0])
 		return rel

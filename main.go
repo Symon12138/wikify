@@ -288,8 +288,8 @@ func newWatchCmd() *cobra.Command {
 		Short: "Watch for changes and auto-regenerate wiki",
 		Long: `Watch the project directory for file changes and auto-regenerate the wiki.
 
-Polls the worktree every 2s (respects .gitignore via skips), debounces 800ms,
-and runs generate on change. Press Ctrl+C to stop.`,
+Event-driven via fsnotify (no polling), debounces 800ms, and runs generate
+on change in plain (non-TUI) mode. Press Ctrl+C to stop.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targetDir := dir
@@ -304,15 +304,16 @@ and runs generate on change. Press Ctrl+C to stop.`,
 			if flat.APIKey == "" {
 				return fmt.Errorf("API key not configured — run wikify config")
 			}
-			fmt.Printf("Watching %s (poll 2s, debounce 800ms) — Ctrl+C to exit\n", absDir)
+			fmt.Printf("Watching %s (fsnotify, debounce 800ms) — Ctrl+C to exit\n", absDir)
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
-			return watch.Watch(ctx, absDir, 2*time.Second, func(changed []string) {
+			return watch.WatchFS(ctx, absDir, 800*time.Millisecond, func(changed []string) {
 				fmt.Printf("\nChange detected: %s\n", watch.FormatChanged(changed, absDir))
 				fmt.Println("Triggering generate...")
 				cfg := runner.Config{
 					APIKey: flat.APIKey, BaseURL: flat.BaseURL, Model: flat.Model,
 					WorkDir: absDir, Language: flat.Language, Workers: flat.Workers, MaxRetries: flat.Retries,
+					Headless: true,
 				}
 				if err := runner.Run(cfg); err != nil {
 					fmt.Printf("generate failed: %v\n", err)

@@ -58,6 +58,10 @@ type Config struct {
 	VerbosePages   bool
 	MaxRetries     int
 
+	// Headless forces plain (non-TUI) output. Used by `wikify watch` so the
+	// auto-regeneration works when stdout is not an interactive terminal.
+	Headless bool
+
 	// Multi-level generation controls (single default path).
 	MaxPages int    // catalog size cap; <=0 auto-scales with repo size after scan
 	LangDir  string // zh | en for final content (default from scan)
@@ -131,7 +135,7 @@ func Run(cfg Config) error {
 		}
 		fmt.Printf("%s: kept %d substantial page(s), will regenerate %d stub(s), %d shallow\n", mode, kept, stubs, shallow)
 		action := "resume"
-		useTUI := !cfg.VerboseCatalog && !cfg.VerbosePages
+		useTUI := !cfg.Headless && !cfg.VerboseCatalog && !cfg.VerbosePages
 		if useTUI {
 			return tuiRun(client, cfg, action, outPath)
 		}
@@ -170,7 +174,7 @@ func Run(cfg Config) error {
 	}
 
 	// Choose TUI or plain output
-	useTUI := !cfg.VerboseCatalog && !cfg.VerbosePages
+	useTUI := !cfg.Headless && !cfg.VerboseCatalog && !cfg.VerbosePages
 	if useTUI {
 		return tuiRun(client, cfg, action, outPath)
 	}
