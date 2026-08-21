@@ -314,6 +314,9 @@ on change in plain (non-TUI) mode. Press Ctrl+C to stop.`,
 					APIKey: flat.APIKey, BaseURL: flat.BaseURL, Model: flat.Model,
 					WorkDir: absDir, Language: flat.Language, Workers: flat.Workers, MaxRetries: flat.Retries,
 					Headless: true,
+					// 无人值守：中断草稿自动 resume，部分失败也发布，绝不阻塞等 stdin
+					Draft:   "resume",
+					AutoYes: true,
 				}
 				if err := runner.Run(cfg); err != nil {
 					fmt.Printf("generate failed: %v\n", err)
