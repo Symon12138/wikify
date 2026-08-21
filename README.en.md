@@ -187,7 +187,7 @@ wikify watch
 wikify watch --dir ./my-project
 ```
 
-Polls every 2s, debounces 800ms.
+Event-driven via **fsnotify** (no polling IO), skips `.git` / `.wikify` / `node_modules`, debounces 800ms, and triggers `generate` in plain mode on change.
 
 ### `wikify browse`
 

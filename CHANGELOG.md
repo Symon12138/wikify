@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **交互式问答**：`wikify ask "question"` 基于 `.wikify` 的 RAG 问答，关键词检索（无向量库），回答必带 `[Title](slug)` / `file://` 依据，未命中时明确说明并列出最近页面（`internal/ask/ask.go`）
 - **多格式扩展**：`wikify export` 新增 `notion`（Markdown 导入）与 `confluence`（Wiki Markup，`h1./h2./{code}` 转换）
-- **Watch 模式**：`wikify watch` 轮询监听文件变更（2s 轮询/800ms 防抖）并自动触发增量生成（`internal/watch/watch.go`）
+- **Watch 模式**：`wikify watch` 基于 fsnotify 事件驱动监听文件变更（无轮询 IO，800ms 防抖，生成期间去重）并自动触发 plain 模式增量生成（`internal/watch/watch.go`）
 
 ### Changed
 - **CLI Help**：Workflow 增加 `wikify ask` 与 `wikify watch`，`export` 支持四格式 `docusaurus|mkdocs|notion|confluence`

@@ -230,7 +230,7 @@ wikify watch
 wikify watch --dir ./my-project
 ```
 
-每 2 秒轮询一次（跳过 `.git` / `.wikify` / `node_modules` 等），800ms 防抖，变更后自动触发 `generate`。按 `Ctrl+C` 退出。
+基于 **fsnotify** 事件驱动（无轮询 IO），跳过 `.git` / `.wikify` / `node_modules` 等，800ms 防抖合并事件风暴，变更后自动以 plain 模式触发 `generate`。按 `Ctrl+C` 退出。
 
 ### `wikify browse`
 
