@@ -58,6 +58,28 @@ func Export(workDir string, model *scan.Model, wiki *models.Wiki, pageContents m
 	// When binding is weak (config/xml/noise only), merge file:// cites already in the body
 	// so code-dependency diagrams can still form a role chain from real page evidence.
 	enrichDependentFilesFromBody(wiki, pageContents)
+	// Enrich pages with runnable code examples extracted from test files (zero LLM cost).
+	for slug, body := range pageContents {
+		if strings.Contains(body, "\u4f7f\u7528\u793a\u4f8b") || strings.Contains(body, "## Examples") {
+			continue
+		}
+		var deps []string
+		for _, p := range wiki.Pages {
+			if p.Slug == slug {
+				deps = p.DependentFiles
+				break
+			}
+		}
+		if len(deps) == 0 {
+			continue
+		}
+		snippets := extractTestSnippets(workDir, deps)
+		if len(snippets) == 0 {
+			continue
+		}
+		exampleSection := "\n\n## Examples / \u4f7f\u7528\u793a\u4f8b\n\n" + strings.Join(snippets, "\n\n") + "\n"
+		pageContents[slug] = body + exampleSection
+	}
 	// Ensure every page has a ContentPath before write.
 	for i := range wiki.Pages {
 		p := &wiki.Pages[i]
