@@ -27,7 +27,7 @@ func main() {
 	root := &cobra.Command{
 		Use:          "wikify",
 		Short:        "Turn any codebase into a beautiful wiki",
-		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs  # 3) zero-LLM export to other site formats\n  wikify lint                              #    check .wikify for broken links / thin pages\n  wikify ask \"question\"                     # 4) RAG Q&A over wiki + sources (cited)\n\nSee https://github.com/Symon12138/wikify for docs.",
+		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs|notion|confluence  # 3) zero-LLM export to other site formats\n  wikify lint                              #    check .wikify for broken links / thin pages\n  wikify ask \"question\"                     # 4) RAG Q&A over wiki + sources (cited)\n\nSee https://github.com/Symon12138/wikify for docs.",
 		SilenceUsage: true,
 	}
 	root.AddCommand(
@@ -293,7 +293,7 @@ func newExportCmd() *cobra.Command {
 Pure file transformation — zero LLM cost. Reads .wikify/{meta/wiki.json,content/**}
 and writes to the target layout.
 
-Supported --format values: docusaurus, mkdocs
+Supported --format values: docusaurus, mkdocs, notion, confluence
 
 Examples:
   wikify export --format docusaurus
@@ -302,7 +302,7 @@ Examples:
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if format == "" {
-				return fmt.Errorf("--format is required: one of %s", "docusaurus, mkdocs")
+				return fmt.Errorf("--format is required: one of %s", "docusaurus, mkdocs, notion, confluence")
 			}
 			targetDir := dir
 			if targetDir == "" {
@@ -320,7 +320,7 @@ Examples:
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "", "Project directory that contains .wikify (default: cwd)")
-	cmd.Flags().StringVar(&format, "format", "", "Target format: docusaurus | mkdocs (required)")
+	cmd.Flags().StringVar(&format, "format", "", "Target format: docusaurus | mkdocs | notion | confluence (required)")
 	cmd.Flags().StringVar(&out, "out", "", "Output directory (default: .wikify/export/<format>)")
 	_ = cmd.MarkFlagRequired("format")
 	return cmd

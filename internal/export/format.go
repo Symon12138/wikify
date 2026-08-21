@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var SupportedFormats = []string{"docusaurus", "mkdocs"}
+var SupportedFormats = []string{"docusaurus", "mkdocs", "notion", "confluence"}
 
 type formatPage struct {
 	Title       string
@@ -77,6 +77,10 @@ func ExportToFormat(workDir, format, outDir string, opts ExportOptions) error {
 		return exportDocusaurus(pages, contents, outDir)
 	case "mkdocs":
 		return exportMkDocs(pages, contents, outDir)
+	case "notion":
+		return exportNotion(pages, contents, outDir)
+	case "confluence":
+		return exportConfluence(pages, contents, outDir)
 	default:
 		return fmt.Errorf("unsupported format %q: choose one of %s", format, strings.Join(SupportedFormats, ", "))
 	}
@@ -167,4 +171,77 @@ func exportMkDocs(pages []formatPage, contents map[string]string, outDir string)
 		}
 	}
 	return os.WriteFile(filepath.Join(outDir, "mkdocs.yml"), []byte(b.String()), 0644)
+}
+
+func exportNotion(pages []formatPage, contents map[string]string, outDir string) error {
+	docsDir := filepath.Join(outDir, "notion")
+	for _, p := range pages {
+		rel := p.ContentPath
+		if rel == "" {
+			rel = p.Title + ".md"
+		}
+		rel = strings.TrimPrefix(filepath.ToSlash(rel), "content/")
+	dest := filepath.Join(docsDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+			return err
+		}
+		body := contents[p.Slug]
+		if !strings.HasPrefix(strings.TrimSpace(body), "---") {
+			body = fmt.Sprintf("---\ntitle: %q\n---\n\n", p.Title) + body
+		}
+		if err := os.WriteFile(dest, []byte(body), 0644); err != nil {
+			return err
+		}
+	}
+	readme := "# Notion export\n\n1. In Notion, use Import -> Markdown, select the notion/ folder.\n"
+	return os.WriteFile(filepath.Join(outDir, "README.md"), []byte(readme), 0644)
+}
+
+func exportConfluence(pages []formatPage, contents map[string]string, outDir string) error {
+	docsDir := filepath.Join(outDir, "confluence")
+	for _, p := range pages {
+		rel := p.ContentPath
+		if rel == "" {
+			rel = p.Title + ".md"
+		}
+		rel = strings.TrimPrefix(filepath.ToSlash(rel), "content/")
+	rel = strings.TrimSuffix(rel, ".md") + ".wiki"
+	dest := filepath.Join(docsDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+			return err
+		}
+		wiki := mdToConfluenceWiki(contents[p.Slug])
+		if err := os.WriteFile(dest, []byte(wiki), 0644); err != nil {
+			return err
+		}
+	}
+	readme := "# Confluence export\n\nEach .wiki file uses Wiki Markup. In Confluence: Create -> Wiki Markup.\n"
+	return os.WriteFile(filepath.Join(outDir, "README.md"), []byte(readme), 0644)
+}
+
+func mdToConfluenceWiki(md string) string {
+	lines := strings.Split(md, "\n")
+	for i, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if strings.HasPrefix(trim, "```") {
+			if strings.HasPrefix(trim, "```mermaid") {
+				lines[i] = "{code:language=text}"
+			} else if trim == "```" {
+				lines[i] = "{code}"
+			} else {
+				lang := strings.TrimPrefix(trim, "```")
+				if lang == "" { lang = "text" }
+				lines[i] = "{code:language=" + lang + "}"
+			}
+			continue
+		}
+		if strings.HasPrefix(trim, "# ") {
+			lines[i] = "h1. " + strings.TrimSpace(strings.TrimPrefix(trim, "# "))
+		} else if strings.HasPrefix(trim, "## ") {
+			lines[i] = "h2. " + strings.TrimSpace(strings.TrimPrefix(trim, "## "))
+		} else if strings.HasPrefix(trim, "### ") {
+			lines[i] = "h3. " + strings.TrimSpace(strings.TrimPrefix(trim, "### "))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
