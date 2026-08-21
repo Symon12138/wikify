@@ -68,15 +68,15 @@ Go to [Releases](https://github.com/Symon12138/wikify/releases) and download the
 
 ```bash
 # Linux amd64
-curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.3/wikify_0.1.3_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.4/wikify_0.1.4_linux_amd64.tar.gz | tar xz
 sudo mv wikify /usr/local/bin/wikify
 
 # macOS Apple Silicon
-curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.3/wikify_0.1.3_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.4/wikify_0.1.4_darwin_arm64.tar.gz | tar xz
 sudo mv wikify /usr/local/bin/wikify
 ```
 
-Windows users: download `wikify_0.1.3_windows_amd64.zip` from [Releases](https://github.com/Symon12138/wikify/releases), unzip, and put `wikify.exe` on your `PATH`.
+Windows users: download `wikify_0.1.4_windows_amd64.zip` from [Releases](https://github.com/Symon12138/wikify/releases), unzip, and put `wikify.exe` on your `PATH`.
 
 **Build from source**
 

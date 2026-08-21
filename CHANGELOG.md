@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.4] - 2026-08-21
 
 ### Added
 - **交互式问答**：`wikify ask "question"` 基于 `.wikify` 的 RAG 问答，关键词检索（无向量库），回答必带 `[Title](slug)` / `file://` 依据，未命中时明确说明并列出最近页面（`internal/ask/ask.go`）
