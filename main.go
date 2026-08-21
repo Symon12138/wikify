@@ -25,13 +25,14 @@ func main() {
 	root := &cobra.Command{
 		Use:          "wikify",
 		Short:        "Turn any codebase into a beautiful wiki",
-		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs  # 3) zero-LLM export to other site formats\n\nSee https://github.com/Symon12138/wikify for docs.",
+		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs  # 3) zero-LLM export to other site formats\n  wikify lint                              #    check .wikify for broken links / thin pages\n\nSee https://github.com/Symon12138/wikify for docs.",
 		SilenceUsage: true,
 	}
 	root.AddCommand(
 		newGenerateCmd(),
 		newPolishCmd(),
 		newExportCmd(),
+		newLintCmd(),
 		newConfigCmd(),
 		newBrowseCmd(),
 		newVersionCmd(),
@@ -186,6 +187,44 @@ inject missing ## 目录, and refresh browse/metadata — without a full generat
 }
 
 // ── export (multi-format) ─────────────────────────────────────────────────────
+
+func newLintCmd() *cobra.Command {
+	var dir string
+	cmd := &cobra.Command{
+		Use:   "lint",
+		Short: "Lint .wikify for broken links and thin pages",
+		Long: `Check the generated .wikify wiki for common issues:
+
+- broken wiki links ([text](path.md) where target missing)
+- thin bodies (<200 runes)
+- structural lint (fences, mermaid, duplicate H2)
+
+Zero LLM cost. Reads .wikify/{meta/wiki.json,content/**}.`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targetDir := dir
+			if targetDir == "" {
+				targetDir, _ = os.Getwd()
+			}
+			absDir, _ := filepath.Abs(targetDir)
+			issues, err := export.LintWiki(absDir)
+			if err != nil {
+				return err
+			}
+			if len(issues) == 0 {
+				fmt.Println("\u2713 Lint passed — no issues found.")
+				return nil
+			}
+			for _, iss := range issues {
+				fmt.Printf("[%s] %s (%s): %s\n", iss.Kind, iss.Title, iss.Slug, iss.Message)
+			}
+			fmt.Printf("\n%d issue(s) found.\n", len(issues))
+			return fmt.Errorf("lint found %d issue(s)", len(issues))
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", "", "Project directory that contains .wikify (default: cwd)")
+	return cmd
+}
 
 func newExportCmd() *cobra.Command {
 	var (
