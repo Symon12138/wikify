@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
 
 var SupportedFormats = []string{"docusaurus", "mkdocs", "notion", "confluence"}
+
+var reConfluenceLink = regexp.MustCompile("\\[([^\\]]+)\\]\\(([^)]+)\\)")
 
 type formatPage struct {
 	Title       string
@@ -241,6 +244,8 @@ func mdToConfluenceWiki(md string) string {
 			lines[i] = "h2. " + strings.TrimSpace(strings.TrimPrefix(trim, "## "))
 		} else if strings.HasPrefix(trim, "### ") {
 			lines[i] = "h3. " + strings.TrimSpace(strings.TrimPrefix(trim, "### "))
+		} else {
+			lines[i] = reConfluenceLink.ReplaceAllString(ln, "[$1|$2]")
 		}
 	}
 	return strings.Join(lines, "\n")
