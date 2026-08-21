@@ -1,0 +1,48 @@
+# wikify GitHub Actions 模板 — 复制到你的项目 .github/workflows/wikify.yml
+# 功能：推送到 main 时自动生成/更新 Wiki（零人工），失败不阻断主流程
+# 依赖：仓库 Secrets 中配置 WIKIFY_API_KEY（必需）、WIKIFY_BASE_URL/WIKIFY_MODEL（可选）
+
+name: wikify
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - ".wikify/**"
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Install wikify
+        run: |
+          curl -L https://github.com/Symon12138/wikify/releases/latest/download/wikify_linux_amd64 -o wikify
+          chmod +x wikify
+          ./wikify version
+      - name: Generate wiki
+        env:
+          WIKIFY_API_KEY: ${{ secrets.WIKIFY_API_KEY }}
+          WIKIFY_BASE_URL: ${{ secrets.WIKIFY_BASE_URL }}
+          WIKIFY_MODEL: ${{ secrets.WIKIFY_MODEL }}
+        run: ./wikify generate -y --workers 2 --retries 2
+      - name: Lint wiki
+        run: ./wikify lint || true
+      - name: Commit wiki
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .wikify
+          git diff --quiet && git diff --staged --quiet || git commit -m "docs: update wiki [skip ci]"
+          git push

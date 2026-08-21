@@ -347,6 +347,12 @@ wikify generate --draft clear
 
 ---
 
+## \uD83D\uDD04 CI/CD \u96C6\u6210
+
+\u590D\u5236 [`docs/ci-template.yml`](docs/ci-template.yml) \u5230\u4F60\u7684\u9879\u76EE `.github/workflows/wikify.yml`\uFF0C\u5E76\u5728\u4ED3\u5E93 Settings \u2192 Secrets \u4E2D\u914D\u7F6E `WIKIFY_API_KEY`\uFF0C\u5373\u53EF\u5728\u6BCF\u6B21\u63A8\u9001\u5230 `main` \u65F6\u81EA\u52A8\u66F4\u65B0 Wiki\u3002\u6A21\u677F\u5DF2\u5305\u542B `wikify lint` \u6821\u9A8C\uFF0C\u5931\u8D25\u4E0D\u963B\u65AD\u4E3B\u6D41\u7A0B\u3002
+
+---
+
 ---
 ## 🌐 LLM 提供商兼容性
 

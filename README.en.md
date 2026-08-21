@@ -259,13 +259,44 @@ Output layout:
 
 ## 🌐 LLM Provider Compatibility
 
-| Provider | base_url |
-|----------|----------|
-| DeepSeek (default) | `https://api.deepseek.com/v1` |
-| OpenAI | `https://api.openai.com/v1` |
-| Ollama (local) | `http://localhost:11434/v1` |
-| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{deploy}/` |
-| Custom proxy | Your endpoint |
+wikify speaks **OpenAI-compatible Chat Completions API** — any compatible provider works. `base_url` suffixes like `/responses` or `/chat/completions` are auto-normalized to the `/v1` root.
+
+```yaml
+language: en
+llm:
+  provider: custom
+  model: gpt-4o
+  api_key: sk-xxxxxxxxxxxxxxxx
+  base_url: https://api.openai.com/v1
+  reasoning_effort: high   # xhigh/high/medium/low or empty — free text (TUI supports manual input)
+concurrency:
+  max_concurrent: 3
+  max_retries: 2
+```
+
+Manage via CLI:
+
+```bash
+wikify config                           # interactive (TTY) / print current config (non-TTY)
+wikify config --api-key sk-xxx
+wikify config --base-url https://...
+wikify config --model gpt-4o
+```
+
+Environment overrides:
+
+```bash
+WIKIFY_API_KEY=sk-xxx wikify generate
+WIKIFY_BASE_URL=https://... wikify generate
+WIKIFY_MODEL=gpt-4o wikify generate
+WIKIFY_REASONING_EFFORT=xhigh wikify generate
+```
+
+
+
+## 🔄 CI/CD Integration
+
+Copy [`docs/ci-template.yml`](docs/ci-template.yml) to your project's `.github/workflows/wikify.yml` and set `WIKIFY_API_KEY` in repository Settings → Secrets. Wiki will auto-update on every push to `main`. Template includes `wikify lint` (non-blocking).
 
 ---
 
