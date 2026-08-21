@@ -25,7 +25,7 @@ func main() {
 	root := &cobra.Command{
 		Use:          "wikify",
 		Short:        "Turn any codebase into a beautiful wiki",
-		Long:         "wikify — generate structured wiki documentation from your local codebase using an AI agent.\nSee https://github.com/Symon12138/wikify for docs.",
+		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs  # 3) zero-LLM export to other site formats\n\nSee https://github.com/Symon12138/wikify for docs.",
 		SilenceUsage: true,
 	}
 	root.AddCommand(
