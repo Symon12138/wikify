@@ -160,7 +160,8 @@ llm:
   provider: custom
   model: deepseek-chat
   api_key: sk-xxxxxxxxxxxxxxxx
-  base_url: https://api.deepseek.com/v1  # 任意 OpenAI 兼容接口
+  base_url: https://api.deepseek.com/v1  # 任意 OpenAI 兼容接口，/responses 等后缀自动归一化
+  reasoning_effort: high   # xhigh/high/medium/low 或空，支持手输（TUI 自由文本）
 
 concurrency:
   max_concurrent: 3   # 并发页面生成数
@@ -185,6 +186,7 @@ wikify config --lang en                 # 切换语言
 WIKIFY_API_KEY=sk-xxx         wikify generate
 WIKIFY_BASE_URL=https://...   wikify generate
 WIKIFY_MODEL=gpt-4o           wikify generate
+WIKIFY_REASONING_EFFORT=xhigh wikify generate
 ```
 
 ---
@@ -231,6 +233,28 @@ WIKIFY_MODEL=gpt-4o           wikify generate
       --dir string  项目目录（默认：当前目录）
 ```
 
+### `wikify polish`
+
+离线重导出已有的 `.wikify`，无需再次调用 LLM：
+
+```bash
+wikify polish
+wikify polish --export-lang zh
+```
+
+会重新应用 tracks / TOC / metadata 格式化已有的 `wiki.json` + `content/**`。
+
+### `wikify export`
+
+将已生成的 `.wikify` 零成本转换为其他文档平台格式：
+
+```bash
+wikify export --format docusaurus          # → .wikify/export/docusaurus/docs/** + _category_.json
+wikify export --format mkdocs --out ./site # → docs/** + mkdocs.yml (material 主题)
+```
+
+支持 `--format docusaurus|mkdocs`，`--out` 为空时默认 `.wikify/export/<format>`。
+
 ### `wikify config`
 
 查看或修改 `~/.wikify/config.yaml`。
@@ -243,6 +267,19 @@ WIKIFY_MODEL=gpt-4o           wikify generate
 - **s** 保存 · **q** 退出
 
 也可使用 `--api-key` / `--base-url` / `--model` / `--lang` / `--workers` / `--retries` 非交互写入。
+
+### `wikify config check`
+
+校验当前配置是否真实可用（拉取模型列表 + 最小对话探针）：
+
+```bash
+wikify config check
+# • 模型列表:已找到 "deepseek-chat" (共 27 个)
+# • 对话探测:成功 · 端点 https://api.deepseek.com/v1/chat/completions
+# ✓ 配置可用
+```
+
+失败原因会自动分类（鉴权/路径/限流/网络/模型不存在等）并给出可操作提示。
 
 ### `wikify version`
 

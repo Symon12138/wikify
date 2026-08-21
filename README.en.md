@@ -188,11 +188,40 @@ Flags:
       --dir string  Project directory (default: cwd)
 ```
 
+### `wikify polish`
+
+Re-export existing `.wikify` without calling the LLM:
+
+```bash
+wikify polish
+wikify polish --export-lang zh
+```
+
+### `wikify export`
+
+Convert the generated `.wikify` to another platform format (zero LLM cost):
+
+```bash
+wikify export --format docusaurus          # → .wikify/export/docusaurus/docs/**
+wikify export --format mkdocs --out ./site # → docs/** + mkdocs.yml
+```
+
 ### `wikify config`
 
 View or edit `~/.wikify/config.yaml`.
 
 With no flags on a TTY, opens an interactive form (↑/↓ select, ←/→ cycle enums and remote models from Base URL `/models`, Enter to type any model, r refresh models, s save, q quit). Flags remain available for scripts.
+
+### `wikify config check`
+
+Verify the current config actually works (fetch model list + minimal chat probe):
+
+```bash
+wikify config check
+# • Model list: found "deepseek-chat" (27 total)
+# • Probe: success
+# ✓ Config OK
+```
 
 ### `wikify version`
 
