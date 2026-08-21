@@ -14,6 +14,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/Symon12138/wikify/internal/ask"
 	"github.com/Symon12138/wikify/internal/browse"
+	"github.com/Symon12138/wikify/internal/watch"
 	"github.com/Symon12138/wikify/internal/config"
 	"github.com/Symon12138/wikify/internal/export"
 	"github.com/Symon12138/wikify/internal/runner"
@@ -27,11 +28,12 @@ func main() {
 	root := &cobra.Command{
 		Use:          "wikify",
 		Short:        "Turn any codebase into a beautiful wiki",
-		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs|notion|confluence  # 3) zero-LLM export to other site formats\n  wikify lint                              #    check .wikify for broken links / thin pages\n  wikify ask \"question\"                     # 4) RAG Q&A over wiki + sources (cited)\n\nSee https://github.com/Symon12138/wikify for docs.",
+		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify watch                             #    watch for changes and auto-regenerate\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs|notion|confluence  # 3) zero-LLM export to other site formats\n  wikify lint                              #    check .wikify for broken links / thin pages\n  wikify ask \"question\"                     # 4) RAG Q&A over wiki + sources (cited)\n\nSee https://github.com/Symon12138/wikify for docs.",
 		SilenceUsage: true,
 	}
 	root.AddCommand(
 		newGenerateCmd(),
+		newWatchCmd(),
 		newPolishCmd(),
 		newExportCmd(),
 		newLintCmd(),
@@ -276,6 +278,51 @@ Examples:
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "", "Project directory that contains .wikify (default: cwd)")
+	return cmd
+}
+
+func newWatchCmd() *cobra.Command {
+	var dir string
+	cmd := &cobra.Command{
+		Use:   "watch",
+		Short: "Watch for changes and auto-regenerate wiki",
+		Long: `Watch the project directory for file changes and auto-regenerate the wiki.
+
+Polls the worktree every 2s (respects .gitignore via skips), debounces 800ms,
+and runs generate on change. Press Ctrl+C to stop.`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targetDir := dir
+			if targetDir == "" {
+				targetDir, _ = os.Getwd()
+			}
+			absDir, _ := filepath.Abs(targetDir)
+			flat, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if flat.APIKey == "" {
+				return fmt.Errorf("API key not configured — run wikify config")
+			}
+			fmt.Printf("Watching %s (poll 2s, debounce 800ms) — Ctrl+C to exit\n", absDir)
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			return watch.Watch(ctx, absDir, 2*time.Second, func(changed []string) {
+				fmt.Printf("\nChange detected: %s\n", watch.FormatChanged(changed, absDir))
+				fmt.Println("Triggering generate...")
+				cfg := runner.Config{
+					APIKey: flat.APIKey, BaseURL: flat.BaseURL, Model: flat.Model,
+					WorkDir: absDir, Language: flat.Language, Workers: flat.Workers, MaxRetries: flat.Retries,
+				}
+				if err := runner.Run(cfg); err != nil {
+					fmt.Printf("generate failed: %v\n", err)
+				} else {
+					fmt.Println("Regenerated")
+				}
+			})
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", "", "Project directory to watch (default: cwd)")
 	return cmd
 }
 
