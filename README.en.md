@@ -178,6 +178,17 @@ Flags:
 | `s` | Skip all failures and commit |
 | `ctrl+c` | Quit |
 
+### `wikify watch`
+
+Watch the project directory and auto-regenerate the wiki:
+
+```bash
+wikify watch
+wikify watch --dir ./my-project
+```
+
+Polls every 2s, debounces 800ms.
+
 ### `wikify browse`
 
 ```

@@ -221,6 +221,17 @@ WIKIFY_REASONING_EFFORT=xhigh wikify generate
 | `s` | 跳过所有失败页面并提交 |
 | `ctrl+c` | 退出 |
 
+### `wikify watch`
+
+监听项目目录文件变更并自动重新生成 Wiki：
+
+```bash
+wikify watch
+wikify watch --dir ./my-project
+```
+
+每 2 秒轮询一次（跳过 `.git` / `.wikify` / `node_modules` 等），800ms 防抖，变更后自动触发 `generate`。按 `Ctrl+C` 退出。
+
 ### `wikify browse`
 
 在浏览器中浏览生成的 Wiki。
