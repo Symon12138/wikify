@@ -19,10 +19,19 @@ func Watch(ctx context.Context, workDir string, interval time.Duration, onChange
 	// Debounce: collect changes within window before firing
 	var pending []string
 	var debounceTimer *time.Timer
+	busy := false // 生成期间不再重复触发，新变更由下次轮询自然捕获
 	flush := func() {
+		if busy {
+			return
+		}
 		if len(pending) > 0 {
-			onChange(pending)
+			changed := pending
 			pending = nil
+			busy = true
+			go func() {
+				defer func() { busy = false }()
+				onChange(changed)
+			}()
 		}
 	}
 	ticker := time.NewTicker(interval)

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -64,6 +65,9 @@ func Ask(ctx context.Context, client *openai.Client, model, workDir, question st
 		"If the context does not contain the answer, say so and list the closest pages. " +
 		"Language: match the user question language."
 	userPrompt := fmt.Sprintf("Context:\n%s\n\nQuestion: %s\n\nAnswer with citations:", ctxText, question)
+	// 推理模型（xhigh）可能需要较长时间；给足 5 分钟
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{

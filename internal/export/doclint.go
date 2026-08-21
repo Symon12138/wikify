@@ -10,7 +10,6 @@ import (
 )
 
 var reWikiLink = regexp.MustCompile("\\[[^\\]]+\\]\\(([^)]+\\.md[^)]*)\\)")
-var reFileCite = regexp.MustCompile("file://[^\\s)\"'<>]+")
 
 type DocLintIssue struct {
 	Slug    string `json:"slug"`

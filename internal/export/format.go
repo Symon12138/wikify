@@ -224,6 +224,7 @@ func exportConfluence(pages []formatPage, contents map[string]string, outDir str
 
 func mdToConfluenceWiki(md string) string {
 	lines := strings.Split(md, "\n")
+	inCode := false
 	for i, ln := range lines {
 		trim := strings.TrimSpace(ln)
 		if strings.HasPrefix(trim, "```") {
@@ -236,7 +237,11 @@ func mdToConfluenceWiki(md string) string {
 				if lang == "" { lang = "text" }
 				lines[i] = "{code:language=" + lang + "}"
 			}
+			inCode = !inCode
 			continue
+		}
+		if inCode {
+			continue // code block 内部不做标题/链接转换
 		}
 		if strings.HasPrefix(trim, "# ") {
 			lines[i] = "h1. " + strings.TrimSpace(strings.TrimPrefix(trim, "# "))
