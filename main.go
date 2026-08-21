@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	openai "github.com/sashabaranov/go-openai"
+	"github.com/Symon12138/wikify/internal/ask"
 	"github.com/Symon12138/wikify/internal/browse"
 	"github.com/Symon12138/wikify/internal/config"
 	"github.com/Symon12138/wikify/internal/export"
@@ -25,7 +27,7 @@ func main() {
 	root := &cobra.Command{
 		Use:          "wikify",
 		Short:        "Turn any codebase into a beautiful wiki",
-		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs  # 3) zero-LLM export to other site formats\n  wikify lint                              #    check .wikify for broken links / thin pages\n\nSee https://github.com/Symon12138/wikify for docs.",
+		Long:         "wikify — turn any codebase into a beautiful wiki (AI agent).\n\nWorkflow:\n  wikify generate                          # 1) scan -> plan -> write pages -> .wikify/\n  wikify browse                            # 2) preview locally at http://localhost:3000\n  wikify polish                            #    re-export without LLM (tracks/TOC/metadata)\n  wikify export --format docusaurus|mkdocs  # 3) zero-LLM export to other site formats\n  wikify lint                              #    check .wikify for broken links / thin pages\n  wikify ask \"question\"                     # 4) RAG Q&A over wiki + sources (cited)\n\nSee https://github.com/Symon12138/wikify for docs.",
 		SilenceUsage: true,
 	}
 	root.AddCommand(
@@ -33,6 +35,7 @@ func main() {
 		newPolishCmd(),
 		newExportCmd(),
 		newLintCmd(),
+		newAskCmd(),
 		newConfigCmd(),
 		newBrowseCmd(),
 		newVersionCmd(),
@@ -220,6 +223,56 @@ Zero LLM cost. Reads .wikify/{meta/wiki.json,content/**}.`,
 			}
 			fmt.Printf("\n%d issue(s) found.\n", len(issues))
 			return fmt.Errorf("lint found %d issue(s)", len(issues))
+		},
+	}
+	cmd.Flags().StringVar(&dir, "dir", "", "Project directory that contains .wikify (default: cwd)")
+	return cmd
+}
+
+func newAskCmd() *cobra.Command {
+	var dir string
+	cmd := &cobra.Command{
+		Use:   "ask [question]",
+		Short: "Ask the wiki (RAG) — answer with citations",
+		Long: `Ask a question against the generated .wikify wiki.
+
+Retrieves relevant pages via keyword search (no vector DB), builds a cited
+context, and asks the configured LLM. Every answer includes its sources
+as [Title](slug) or file:// paths. Zero extra config — reuses ~/.wikify/config.yaml.
+
+Examples:
+  wikify ask "支付流程怎么走"
+  wikify ask --dir ./my-project "how does auth work"`,
+		SilenceUsage: true,
+		Args:         cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			question := strings.Join(args, " ")
+			targetDir := dir
+			if targetDir == "" {
+				targetDir, _ = os.Getwd()
+			}
+			absDir, _ := filepath.Abs(targetDir)
+			flat, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if flat.APIKey == "" {
+				return fmt.Errorf("API key 未配置 — 请先运行 wikify config")
+			}
+			// Build OpenAI client (same as runner)
+			oaiCfg := openai.DefaultConfig(flat.APIKey)
+			oaiCfg.BaseURL = flat.BaseURL
+			if flat.BaseURL == "" {
+				oaiCfg.BaseURL = "https://api.deepseek.com/v1"
+			}
+			// Reuse runner's HTTP tuning if available, else default
+			client := openai.NewClientWithConfig(oaiCfg)
+			res, err := ask.Ask(cmd.Context(), client, flat.Model, absDir, question)
+			if err != nil {
+				return err
+			}
+			fmt.Println(res.Answer)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "", "Project directory that contains .wikify (default: cwd)")
