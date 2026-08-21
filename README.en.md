@@ -223,6 +223,17 @@ wikify config check
 # ✓ Config OK
 ```
 
+### `wikify ask`
+
+Ask a question against the generated `.wikify` wiki (RAG) — every answer includes citations:
+
+```bash
+wikify ask "how does payment work"
+wikify ask --dir ./my-project "explain auth"
+```
+
+Retrieves relevant pages via keyword search (no vector DB) and cites as `[Title](slug)` or `file://`. Reuses `~/.wikify/config.yaml`.
+
 ### `wikify version`
 
 Print version, Go runtime, and platform info.

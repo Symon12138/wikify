@@ -281,6 +281,17 @@ wikify config check
 
 失败原因会自动分类（鉴权/路径/限流/网络/模型不存在等）并给出可操作提示。
 
+### `wikify ask`
+
+基于已生成的 `.wikify` 问答（RAG），回答必带依据：
+
+```bash
+wikify ask "支付流程怎么走"
+wikify ask --dir ./my-project "how does auth work"
+```
+
+检索 `.wikify/content/**` 相关页面（关键词检索，无向量库），答案中以 `[标题](slug)` 或 `file://` 形式标注来源；若上下文无答案则明确说明并列出最近页面。复用 `~/.wikify/config.yaml` 的 LLM 配置。
+
 ### `wikify version`
 
 显示版本、Go 运行时及平台信息。
