@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/Symon12138/wikify/internal/pathsafe"
 )
 
 var SupportedFormats = []string{"docusaurus", "mkdocs", "notion", "confluence"}
@@ -53,7 +55,11 @@ func ExportToFormat(workDir, format, outDir string, opts ExportOptions) error {
 			rel = p.Title + ".md"
 		}
 		rel = strings.TrimPrefix(filepath.ToSlash(rel), "content/")
-		b, err := os.ReadFile(filepath.Join(contentDir, filepath.FromSlash(rel)))
+		safe, err := pathsafe.Rel(rel)
+		if err != nil {
+			return fmt.Errorf("page %q has unsafe content_path %q: %w", p.Slug, p.ContentPath, err)
+		}
+		b, err := os.ReadFile(filepath.Join(contentDir, filepath.FromSlash(safe)))
 		if err != nil {
 			continue
 		}
@@ -100,8 +106,11 @@ func exportDocusaurus(pages []formatPage, contents map[string]string, outDir str
 		if rel == "" {
 			rel = p.Title + ".md"
 		}
-		rel = strings.TrimPrefix(filepath.ToSlash(rel), "content/")
-		dest := filepath.Join(docsDir, filepath.FromSlash(rel))
+		safe, err := pathsafe.Rel(strings.TrimPrefix(filepath.ToSlash(rel), "content/"))
+		if err != nil {
+			return fmt.Errorf("page %q unsafe content_path %q: %w", p.Slug, p.ContentPath, err)
+		}
+		dest := filepath.Join(docsDir, filepath.FromSlash(safe))
 		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 			return err
 		}
@@ -133,15 +142,14 @@ func exportDocusaurus(pages []formatPage, contents map[string]string, outDir str
 func exportMkDocs(pages []formatPage, contents map[string]string, outDir string) error {
 	docsDir := filepath.Join(outDir, "docs")
 	for _, p := range pages {
-		rel := p.ContentPath
-		if rel == "" {
-			rel = p.Title + ".md"
+		safe, err := pathsafe.Rel(strings.TrimPrefix(filepath.ToSlash(p.ContentPath), "content/"))
+		if err != nil {
+			return fmt.Errorf("page %q unsafe content_path %q: %w", p.Slug, p.ContentPath, err)
 		}
-		rel = strings.TrimPrefix(filepath.ToSlash(rel), "content/")
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(docsDir, filepath.FromSlash(rel))), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(docsDir, filepath.FromSlash(safe))), 0755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(docsDir, filepath.FromSlash(rel)), []byte(contents[p.Slug]), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(docsDir, filepath.FromSlash(safe)), []byte(contents[p.Slug]), 0644); err != nil {
 			return err
 		}
 	}

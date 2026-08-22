@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Symon12138/wikify/internal/pathsafe"
 )
 
 var reWikiLink = regexp.MustCompile("\\[[^\\]]+\\]\\(([^)]+\\.md[^)]*)\\)")
@@ -43,7 +45,12 @@ func LintWiki(workDir string) ([]DocLintIssue, error) {
 		if rel == "" {
 			rel = p.Title + ".md"
 		}
-		rel = strings.TrimPrefix(filepath.ToSlash(rel), "content/")
+		safe, serr := pathsafe.Rel(strings.TrimPrefix(filepath.ToSlash(rel), "content/"))
+		if serr != nil {
+			issues = append(issues, DocLintIssue{Slug: p.Slug, Title: p.Title, Kind: "unsafe-path", Message: fmt.Sprintf("content_path escapes content dir: %q", p.ContentPath)})
+			continue
+		}
+		rel = safe
 		body, err := os.ReadFile(filepath.Join(contentDir, filepath.FromSlash(rel)))
 		if err != nil {
 			issues = append(issues, DocLintIssue{Slug: p.Slug, Title: p.Title, Kind: "missing-file", Message: fmt.Sprintf("content file missing: %s", rel)})

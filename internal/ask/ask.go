@@ -11,6 +11,7 @@ import (
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+	"github.com/Symon12138/wikify/internal/pathsafe"
 )
 
 // AskResult contains the answer with evidence.
@@ -134,7 +135,11 @@ func loadWikiPages(workDir string) ([]rankedPage, map[string]string, error) {
 			rel = p.Title + ".md"
 		}
 		rel = filepath.ToSlash(rel)
-		rel = strings.TrimPrefix(rel, "content/")
+		safe, serr := pathsafe.Rel(strings.TrimPrefix(rel, "content/"))
+		if serr != nil {
+			continue // skip malicious page metadata
+		}
+		rel = safe
 		b, err := os.ReadFile(filepath.Join(root, "content", filepath.FromSlash(rel)))
 		if err != nil {
 			continue

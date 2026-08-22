@@ -14,6 +14,7 @@ import (
 
 	"github.com/Symon12138/wikify/internal/evidence"
 	"github.com/Symon12138/wikify/internal/models"
+	"github.com/Symon12138/wikify/internal/pathsafe"
 	"github.com/Symon12138/wikify/internal/scan"
 )
 
@@ -89,6 +90,9 @@ func Export(workDir string, model *scan.Model, wiki *models.Wiki, pageContents m
 			} else {
 				p.ContentPath = p.Title + ".md"
 			}
+		}
+		if _, err := pathsafe.Rel(strings.TrimPrefix(filepath.ToSlash(p.ContentPath), "content/")); err != nil {
+			return fmt.Errorf("page %q has unsafe content_path %q: %w", p.Slug, p.ContentPath, err)
 		}
 	}
 
