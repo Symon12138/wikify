@@ -30,9 +30,11 @@ Key highlights:
 
 - 📦 **Single binary** — download directly from [Releases](https://github.com/Symon12138/wikify/releases), no package manager needed
 - 🖥️ **Live TUI** — color-coded progress table with per-page retry
-- 🔁 **Draft & resume** — pick up where you left off after interruption
-- 🔌 **Config file** — stores settings in `~/.wikify/config.yaml`
-- 🌐 **Any OpenAI-compatible API** — DeepSeek, OpenAI, Ollama, etc.
+- 👁️ **Watch mode** — `wikify watch` regenerates on code changes (fsnotify, event-driven)
+- 💬 **Ask the wiki** — `wikify ask` answers questions over generated docs, always with citations
+- 📤 **Multi-format export** — Docusaurus / MkDocs / Notion / Confluence in one command
+- ✅ **Quality built-in** — auto retry & early-stop, `wikify lint` offline checks, path-safety validation
+- 🔌 **Any OpenAI-compatible API** — DeepSeek, OpenAI, Ollama, etc.
 
 ---
 
@@ -109,6 +111,15 @@ wikify generate
 
 ```bash
 wikify browse   # opens http://localhost:3000
+```
+
+### 4. Keep it alive & use it
+
+```bash
+wikify watch                              # auto-regenerate on code changes (fsnotify)
+wikify lint                               # offline checks: broken links / thin pages
+wikify ask "how does payment work?"        # Q&A over the docs, with citations
+wikify export --format docusaurus          # Docusaurus/MkDocs/Notion/Confluence
 ```
 
 ---
@@ -283,8 +294,9 @@ Output layout:
 .wikify/
 ├── drafts/          # In-progress drafts (cleared on publish)
 ├── content/         # Final multi-level markdown
-├── meta/            # wiki.json / browse-index / metadata
+├── meta/            # wiki.json / browse-index / metadata / quality-report
 ├── wiki_plan.yaml
+├── export/          # wikify export output (docusaurus|mkdocs|notion|confluence)
 └── build/           # Static site (browse --build)
 ```
 

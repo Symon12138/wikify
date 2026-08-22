@@ -31,8 +31,11 @@ wikify 专注于以下优势：
 - 🚀 **直接下载，无需包管理器** — 单一二进制，下载后直接使用
 - 🖥️ **实时 TUI** — 彩色进度表格，支持单页重试
 - 🔁 **草稿恢复** — 中断后可从断点继续生成
-- 🔌 **配置文件** — 使用 `~/.wikify/config.yaml`
-- 🌐 **支持任意 OpenAI 兼容接口** — DeepSeek、OpenAI、Ollama 等
+- 👁️ **Watch 模式** — `wikify watch` 监听代码变更自动重新生成（fsnotify 事件驱动）
+- 💬 **Wiki 问答** — `wikify ask` 基于生成文档回答问题，答案必带出处引用
+- 📤 **多格式导出** — 一键转 Docusaurus / MkDocs / Notion / Confluence
+- ✅ **质量内建** — 失败自动重试与早停、`wikify lint` 离线体检、路径安全校验
+- 🔌 **任意 OpenAI 兼容接口** — DeepSeek、OpenAI、Ollama 等
 
 ---
 
@@ -145,6 +148,15 @@ wikify generate --max-pages 80
 ```
 
 页面会尽量包含 `<cite>`、`file://path#L` 引用与目录骨架；`wiki.json` 中保留 `dependent_files` / `content_path` 等字段以便恢复。
+
+### 5. 持续维护与使用
+
+```bash
+wikify watch                              # 代码变更自动重新生成（fsnotify，无人值守）
+wikify lint                               # 离线体检：断链/薄页/结构问题
+wikify ask "支付流程怎么走？"               # 基于文档问答，答案必带出处
+wikify export --format docusaurus          # 导出 Docusaurus/MkDocs/Notion/Confluence
+```
 
 ---
 
@@ -352,8 +364,9 @@ wikify 使用**两阶段 ReAct 智能体**流水线：
 .wikify/
 ├── drafts/              # 生成中的草稿（提交后清空）
 ├── content/             # 最终多级 Markdown
-├── meta/                # wiki.json / browse-index / metadata
+├── meta/                # wiki.json / browse-index / metadata / quality-report
 ├── wiki_plan.yaml
+├── export/              # wikify export 产物（docusaurus|mkdocs|notion|confluence）
 └── build/               # browse --build 静态站点
 ```
 
