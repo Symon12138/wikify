@@ -71,15 +71,15 @@ Phase 2 — Generate Pages (12/28)
 
 ```bash
 # Linux amd64
-curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.5/wikify_0.1.5_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.6/wikify_0.1.6_linux_amd64.tar.gz | tar xz
 sudo mv wikify /usr/local/bin/wikify
 
 # macOS Apple Silicon
-curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.5/wikify_0.1.5_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.6/wikify_0.1.6_darwin_arm64.tar.gz | tar xz
 sudo mv wikify /usr/local/bin/wikify
 ```
 
-Windows 用户直接从 [Releases](https://github.com/Symon12138/wikify/releases) 下载 `wikify_0.1.5_windows_amd64.zip`，解压后将 `wikify.exe` 放入 `PATH`。
+Windows 用户直接从 [Releases](https://github.com/Symon12138/wikify/releases) 下载 `wikify_0.1.6_windows_amd64.zip`，解压后将 `wikify.exe` 放入 `PATH`。
 
 **方式二：从源码构建**
 

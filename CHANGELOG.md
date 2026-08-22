@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-08-21
+
+### Changed
+- **docs**：中英文 README 全面同步至当前能力——补 `wikify lint` 命令参考、简介亮点更新（watch/ask/export/lint/路径安全）、Quick Start 增加持续维护步骤、输出目录树补充 export/ 与 quality-report
+- **docs**：修复 CI 小节 unicode 转义乱码
+
 ## [0.1.5] - 2026-08-21
 
 ### Fixed
