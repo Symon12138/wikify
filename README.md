@@ -292,6 +292,17 @@ wikify config check
 
 失败原因会自动分类（鉴权/路径/限流/网络/模型不存在等）并给出可操作提示。
 
+### `wikify lint`
+
+离线检查已生成的 `.wikify`，零 LLM 成本：
+
+```bash
+wikify lint
+wikify lint --dir ./my-project
+```
+
+检查项：失效的站内链接（`[text](path.md)` 目标不存在）、过薄页面（<200 字符）、结构性问题（代码围栏不闭合 / 非法 mermaid / 重复 H2）、`content_path` 路径越界。发现问题时以非零退出码结束，适合接入 CI。
+
 ### `wikify ask`
 
 基于已生成的 `.wikify` 问答（RAG），回答必带依据：

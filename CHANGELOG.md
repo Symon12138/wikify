@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **安全**：阻止恶意 `wiki.json` 中 `content_path` 的路径穿越（`../` 逃逸导出根目录）——新增 `internal/pathsafe` 校验，接入 export 四格式 / lint / ask，lint 新增 `unsafe-path` 报告
 - **watch**：无人值守触发的 generate 不再可能阻塞在 stdin（强制 resume + 自动发布部分结果）
 - **docs**：修复 README CI 小节的 unicode 转义乱码
+- **docs**：中英文 README 补充 `wikify lint` 命令参考（检查项、CI 非零退出语义）
 
 ## [0.1.4] - 2026-08-21
 

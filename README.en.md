@@ -234,6 +234,17 @@ wikify config check
 # ✓ Config OK
 ```
 
+### `wikify lint`
+
+Offline check of the generated `.wikify`, zero LLM cost:
+
+```bash
+wikify lint
+wikify lint --dir ./my-project
+```
+
+Checks: broken internal links, thin pages (<200 runes), structural issues (unclosed fences / invalid mermaid / duplicate H2), and unsafe `content_path`. Exits non-zero on findings — CI friendly.
+
 ### `wikify ask`
 
 Ask a question against the generated `.wikify` wiki (RAG) — every answer includes citations:
