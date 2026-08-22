@@ -25,6 +25,11 @@ archives:
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
+# 免安装裸二进制：下载即用，无需解压（Windows 自动带 .exe 后缀）
+  - id: bare
+    formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
 checksum:
   name_template: "checksums.txt"
 

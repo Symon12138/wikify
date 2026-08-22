@@ -70,15 +70,22 @@ Go to [Releases](https://github.com/Symon12138/wikify/releases) and download the
 
 ```bash
 # Linux amd64
-curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.6/wikify_0.1.6_linux_amd64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.7/wikify_0.1.7_linux_amd64.tar.gz | tar xz
 sudo mv wikify /usr/local/bin/wikify
 
 # macOS Apple Silicon
-curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.6/wikify_0.1.6_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/Symon12138/wikify/releases/download/v0.1.7/wikify_0.1.7_darwin_arm64.tar.gz | tar xz
 sudo mv wikify /usr/local/bin/wikify
 ```
 
-Windows users: download `wikify_0.1.6_windows_amd64.zip` from [Releases](https://github.com/Symon12138/wikify/releases), unzip, and put `wikify.exe` on your `PATH`.
+Windows users — either:
+
+```powershell
+# No-extraction single-file download
+Invoke-WebRequest -Uri "https://github.com/Symon12138/wikify/releases/download/v0.1.7/wikify_0.1.7_windows_amd64.exe" -OutFile wikify.exe
+```
+
+or grab `wikify_0.1.7_windows_amd64.zip` from [Releases](https://github.com/Symon12138/wikify/releases), unzip, and put `wikify.exe` on your `PATH`.
 
 **Build from source**
 
